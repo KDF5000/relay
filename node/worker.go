@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -142,6 +143,15 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 			return relay.Run{}, prepareErr
 		}
 		workDir, cleanupWorkspace = prepared.Dir, prepared.Cleanup
+		assignment.Request.Instructions.Workspace = append(
+			assignment.Request.Instructions.Workspace,
+			relay.InstructionFragment{
+				ID:      "relay-prepared-workspace",
+				Version: "1",
+				Title:   "Prepared workspace",
+				Content: preparedWorkspaceInstruction(assignment.Request.Workspace, workDir),
+			},
+		)
 		defer func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -202,6 +212,12 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 			eventErr = fmt.Errorf("relay node: deliver event %s: %w", eventType, err)
 			cancelExecution()
 		}
+	}
+	if workDir != "" {
+		emit(ctx, "workspace.prepared", map[string]any{
+			"kind":     assignment.Request.Workspace.Kind,
+			"work_dir": workDir,
+		})
 	}
 	invoker := relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{
 		Run: run, Principal: assignment.Request.Principal, Grants: assignment.Request.Capabilities, Provider: provider,
@@ -280,6 +296,18 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 		return relay.Run{}, errors.Join(completeErr, leaseErr)
 	}
 	return relay.Run{ID: assignment.RunID, AgentID: assignment.Request.AgentID, Runtime: assignment.Request.Runtime, Source: assignment.Request.Source, Status: relay.RunSucceeded, Result: &result}, nil
+}
+
+func preparedWorkspaceInstruction(spec relay.WorkspaceSpec, workDir string) string {
+	kind := strings.TrimSpace(spec.Kind)
+	if kind == "" {
+		kind = "temporary"
+	}
+	return fmt.Sprintf(
+		"Relay prepared the selected %s workspace before starting this run. Your current working directory is %q. Treat this directory as the authoritative project root for the task. Run project commands and read or modify project files from this directory. Do not search the host for another copy of the repository and do not clone the primary repository yourself unless the user explicitly asks you to work outside the selected project.",
+		kind,
+		workDir,
+	)
 }
 
 type interactionBroker struct {

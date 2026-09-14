@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,7 +15,16 @@ import (
 	"github.com/KDF5000/relay"
 	"github.com/KDF5000/relay/controlplane"
 	"github.com/KDF5000/relay/node"
+	"github.com/KDF5000/relay/workspace"
 )
+
+type preparedWorkspace struct {
+	dir string
+}
+
+func (p preparedWorkspace) Prepare(context.Context, string, string, relay.WorkspaceSpec) (workspace.Prepared, error) {
+	return workspace.Prepared{Dir: p.dir, Cleanup: func(context.Context) error { return nil }}, nil
+}
 
 type failingEvents struct {
 	node.ControlPlane
@@ -96,6 +106,60 @@ func TestWorkerRetriesLostCompletionResponse(t *testing.T) {
 	}
 	if terminal != 1 {
 		t.Fatalf("terminal events=%d", terminal)
+	}
+}
+
+func TestWorkerPinsExecutionToPreparedWorkspace(t *testing.T) {
+	ctx := context.Background()
+	service := controlplane.New(time.Second)
+	workDir := t.TempDir()
+	var execution relay.Execution
+	worker := &node.Worker{
+		Registration: controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "workspace-node", Runtimes: []controlplane.Runtime{{Provider: "test"}}, Capacity: 1},
+		ControlPlane: service,
+		Workspaces:   preparedWorkspace{dir: workDir},
+		Executors: node.ExecutorMap{"test": relay.ExecutorFunc(func(_ context.Context, value relay.Execution) (relay.Result, error) {
+			execution = value
+			return relay.Result{Summary: "done"}, nil
+		})},
+	}
+	if _, err := worker.Register(ctx); err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Submit(ctx, relay.Request{
+		AgentID:        "agent",
+		IdempotencyKey: "prepared-workspace",
+		Runtime:        relay.RuntimeRequirement{Provider: "test"},
+		Input:          relay.Input{Prompt: "work"},
+		Workspace:      relay.WorkspaceSpec{Kind: "git", Source: "git@example.test:acme/project.git"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if execution.WorkDir != workDir {
+		t.Fatalf("work dir = %q, want %q", execution.WorkDir, workDir)
+	}
+	if !strings.Contains(execution.Instructions.Stable, "authoritative project root") ||
+		!strings.Contains(execution.Instructions.Stable, workDir) ||
+		!strings.Contains(execution.Instructions.Stable, "Do not search the host") {
+		t.Fatalf("workspace instruction missing from stable instructions:\n%s", execution.Instructions.Stable)
+	}
+	events, err := service.Events(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type == "workspace.prepared" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("workspace.prepared event was not emitted")
 	}
 }
 
