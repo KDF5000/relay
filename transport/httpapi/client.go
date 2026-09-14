@@ -20,6 +20,11 @@ import (
 
 var ErrEventStreamInterrupted = errors.New("relay HTTP: event stream ended before a terminal event")
 
+// Run event histories can include command output and other sizeable payloads.
+// Keep a defensive bound, but do not truncate normal long-running sessions at
+// the former 8 MiB limit and then surface a misleading JSON decode error.
+const maxJSONResponseBytes = 64 << 20
+
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client
@@ -351,9 +356,12 @@ func (c *Client) do(ctx context.Context, method, path string, input, output any)
 		}
 		return nil
 	}
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxJSONResponseBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(responseBody) > maxJSONResponseBytes {
+		return fmt.Errorf("relay HTTP: JSON response exceeds %d MiB", maxJSONResponseBytes>>20)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var failure map[string]string
