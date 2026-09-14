@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/KDF5000/relay"
@@ -65,6 +66,8 @@ type Service struct {
 	leaseTTL         time.Duration
 	nodeOfflineAfter time.Duration
 	blobs            BlobStore
+	updatesMu        sync.Mutex
+	updates          map[string]chan struct{}
 }
 
 type Options struct {
@@ -95,7 +98,7 @@ func NewWithOptions(storage Storage, options Options) *Service {
 	if options.BlobStore == nil {
 		options.BlobStore = NewMemoryBlobStore()
 	}
-	return &Service{storage: storage, leaseTTL: options.LeaseTTL, nodeOfflineAfter: options.NodeOfflineAfter, blobs: options.BlobStore}
+	return &Service{storage: storage, leaseTTL: options.LeaseTTL, nodeOfflineAfter: options.NodeOfflineAfter, blobs: options.BlobStore, updates: make(map[string]chan struct{})}
 }
 
 func (s *Service) RegisterNode(ctx context.Context, registration NodeRegistration) (Node, error) {
@@ -149,15 +152,27 @@ func (s *Service) Submit(ctx context.Context, request relay.Request) (relay.Run,
 			return relay.Run{}, errors.New("timeout must be a positive duration")
 		}
 	}
-	return s.storage.Submit(ctx, request)
+	run, err := s.storage.Submit(ctx, request)
+	if err == nil {
+		s.notifyRun(run.ID)
+	}
+	return run, err
 }
 
 func (s *Service) Claim(ctx context.Context, nodeID string) (Assignment, error) {
-	return s.storage.Claim(ctx, nodeID, s.leaseTTL)
+	assignment, err := s.storage.Claim(ctx, nodeID, s.leaseTTL)
+	if err == nil {
+		s.notifyRun(assignment.RunID)
+	}
+	return assignment, err
 }
 
 func (s *Service) Start(ctx context.Context, assignment Assignment) error {
-	return s.storage.Start(ctx, assignment)
+	err := s.storage.Start(ctx, assignment)
+	if err == nil {
+		s.notifyRun(assignment.RunID)
+	}
+	return err
 }
 
 func (s *Service) Renew(ctx context.Context, assignment Assignment) (LeaseUpdate, error) {
@@ -177,23 +192,69 @@ func (s *Service) CancelRun(ctx context.Context, runID string, request CancelReq
 	} else if err := authorizeRunScope(ctx, run); err != nil {
 		return relay.Run{}, err
 	}
-	return s.storage.CancelRun(ctx, runID, request)
+	run, err := s.storage.CancelRun(ctx, runID, request)
+	if err == nil {
+		s.notifyRun(runID)
+	}
+	return run, err
 }
 
 func (s *Service) AcknowledgeCancellation(ctx context.Context, assignment Assignment) error {
-	return s.storage.AcknowledgeCancellation(ctx, assignment)
+	err := s.storage.AcknowledgeCancellation(ctx, assignment)
+	if err == nil {
+		s.notifyRun(assignment.RunID)
+	}
+	return err
 }
 
 func (s *Service) AppendEvent(ctx context.Context, runID, attemptID, lease, eventType string, data any, eventIDs ...string) error {
-	return s.storage.AppendEvent(ctx, runID, attemptID, lease, eventType, data, eventIDs...)
+	err := s.storage.AppendEvent(ctx, runID, attemptID, lease, eventType, data, eventIDs...)
+	if err == nil {
+		s.notifyRun(runID)
+	}
+	return err
 }
 
 func (s *Service) Complete(ctx context.Context, assignment Assignment, result relay.Result) error {
-	return s.storage.Complete(ctx, assignment, result)
+	err := s.storage.Complete(ctx, assignment, result)
+	if err == nil {
+		s.notifyRun(assignment.RunID)
+	}
+	return err
 }
 
 func (s *Service) Fail(ctx context.Context, assignment Assignment, cause string) error {
-	return s.storage.Fail(ctx, assignment, cause)
+	err := s.storage.Fail(ctx, assignment, cause)
+	if err == nil {
+		s.notifyRun(assignment.RunID)
+	}
+	return err
+}
+
+// RunUpdates returns a process-local signal that closes after the Run changes.
+// Event streams retain a polling fallback for changes committed by another
+// Relay Server instance sharing the same durable store.
+func (s *Service) RunUpdates(runID string) <-chan struct{} {
+	s.updatesMu.Lock()
+	defer s.updatesMu.Unlock()
+	if signal := s.updates[runID]; signal != nil {
+		return signal
+	}
+	signal := make(chan struct{})
+	s.updates[runID] = signal
+	return signal
+}
+
+func (s *Service) notifyRun(runID string) {
+	if runID == "" {
+		return
+	}
+	s.updatesMu.Lock()
+	defer s.updatesMu.Unlock()
+	if signal := s.updates[runID]; signal != nil {
+		close(signal)
+	}
+	s.updates[runID] = make(chan struct{})
 }
 
 func (s *Service) GetRun(ctx context.Context, runID string) (relay.Run, error) {
@@ -251,6 +312,7 @@ func (s *Service) UploadArtifact(ctx context.Context, assignment Assignment, art
 		_ = s.blobs.Delete(context.Background(), artifact.ID)
 		return relay.Artifact{}, err
 	}
+	s.notifyRun(assignment.RunID)
 	return artifact, nil
 }
 

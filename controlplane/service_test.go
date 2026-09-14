@@ -221,6 +221,48 @@ func TestRunningAttemptRecoveryCreatesNewAttemptAndFencesOldLease(t *testing.T) 
 	}
 }
 
+func TestRunUpdatesSignalsNewEvents(t *testing.T) {
+	ctx := context.Background()
+	service := controlplane.New(time.Second)
+	if _, err := service.RegisterNode(ctx, controlplane.NodeRegistration{
+		ProtocolVersion: relay.ProtocolVersion,
+		ID:              "node",
+		Capacity:        1,
+		Runtimes:        []controlplane.Runtime{{Provider: "test"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Submit(ctx, relay.Request{
+		AgentID: "agent", IdempotencyKey: "update-signal",
+		Runtime: relay.RuntimeRequirement{Provider: "test"}, Input: relay.Input{Prompt: "work"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment, err := service.Claim(ctx, "node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start(ctx, assignment); err != nil {
+		t.Fatal(err)
+	}
+
+	updated := service.RunUpdates(run.ID)
+	if err := service.AppendEvent(ctx, run.ID, assignment.AttemptID, assignment.LeaseToken, "assistant.message.delta", map[string]string{"delta": "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-updated:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Run update signal was not closed after appending an event")
+	}
+	select {
+	case <-service.RunUpdates(run.ID):
+		t.Fatal("new Run update signal was already closed")
+	default:
+	}
+}
+
 func TestRunningAttemptWithoutRetryFailsAfterLeaseExpiry(t *testing.T) {
 	ctx := context.Background()
 	service := controlplane.New(5 * time.Millisecond)

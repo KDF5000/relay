@@ -194,11 +194,6 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		after = value
 	}
-	events, err := h.service.EventsAfter(r.Context(), r.PathValue("runID"), after)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming is unavailable"})
@@ -226,14 +221,16 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return nil
 	}
-	if err := writeEvents(events); err != nil {
-		return
-	}
-	poll := time.NewTicker(250 * time.Millisecond)
+	poll := time.NewTicker(time.Second)
 	keepalive := time.NewTicker(15 * time.Second)
 	defer poll.Stop()
 	defer keepalive.Stop()
 	for {
+		updated := h.service.RunUpdates(r.PathValue("runID"))
+		values, err := h.service.EventsAfter(r.Context(), r.PathValue("runID"), after)
+		if err != nil || writeEvents(values) != nil {
+			return
+		}
 		run, err := h.service.GetRun(r.Context(), r.PathValue("runID"))
 		if err != nil {
 			return
@@ -248,16 +245,13 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-updated:
 		case <-keepalive.C:
 			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
 		case <-poll.C:
-			values, err := h.service.EventsAfter(r.Context(), r.PathValue("runID"), after)
-			if err != nil || writeEvents(values) != nil {
-				return
-			}
 		}
 	}
 }
