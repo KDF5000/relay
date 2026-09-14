@@ -53,6 +53,17 @@ type WorkspaceSpec struct {
 	Ref       string `json:"ref,omitempty"`
 	Subdir    string `json:"subdir,omitempty"`
 	Ephemeral bool   `json:"ephemeral,omitempty"`
+	// ReuseKey is an opaque, caller-owned identity for a prepared workspace.
+	// Relay scopes it to the workspace source and never assigns product meaning
+	// (such as project, task, or conversation) to the value.
+	ReuseKey string `json:"reuse_key,omitempty"`
+	// Lifecycle controls when a prepared workspace is removed. The empty value
+	// and "attempt" preserve the original per-attempt behavior. "reusable"
+	// retains the workspace for later attempts using the same ReuseKey.
+	Lifecycle string `json:"lifecycle,omitempty"`
+	// Branch is an optional Git provider hint used when a reusable worktree is
+	// created. It is ignored by non-Git workspace providers.
+	Branch string `json:"branch,omitempty"`
 }
 
 type RetryPolicy struct {

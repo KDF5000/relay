@@ -287,6 +287,12 @@ relayctl doctor --execute --runtime-id developer-node/codex --timeout 5m
 
 Agent 可以使用临时目录、已有本地目录、Git mirror 或隔离 worktree。固定到远程 Node 的 Runtime 会在该 Node 上解析本地工作区路径，而不是在 Server 上解析。
 
+Workspace 是基础设施协议，不是项目管理模型。Relay 不理解 Conversation、Issue、业务系统中的
+Repository 或 Review 流程。多个 Run 需要共享一个 Git worktree 时，调用方可以提供不透明的
+`reuse_key` 并设置 `lifecycle=reusable`。Relay 只负责按 Git Source 隔离该键、串行使用同一个
+worktree，以及执行 Workspace 生命周期操作；复用键的业务含义仍由调用方负责。`branch` 只是
+Git Workspace Provider 的可选参数，在 Relay 内没有业务工作流语义。
+
 ### Capability
 
 业务系统可以暴露领域操作，而不需要把领域语义加入 Relay Core。Runtime 调用 `relay-tool`，Relay 校验 Run Grant 和资源范围，再调用配置的 Binding。

@@ -133,6 +133,30 @@ func main() {
 
 Prefer the smallest interface needed by application code: `sdk.Submitter`, `sdk.Runs`, `sdk.Events`, `sdk.Artifacts`, or `sdk.Interactions`. `sdk.Backend` composes the complete surface for the convenience client. This keeps business adapters independent from unrelated Relay features.
 
+### Send images to a Runtime
+
+Hosts can attach up to four PNG, JPEG, WebP, or GIF images to a text input. Relay validates the declared media type and size, transfers the bytes with the persisted Request, materializes them in a run-private directory on the selected Node, and passes them through the Runtime's native image-input protocol.
+
+```go
+imageData, err := relay.EncodeInputImages(relay.InputImage{
+    Name:        "screenshot.png",
+    ContentType: "image/png",
+    Data:        screenshotBytes,
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+request.Input = relay.Input{
+    Type:    "text",
+    Version: "1",
+    Prompt:  "Explain the error shown in this screenshot.",
+    Data:    imageData,
+}
+```
+
+Each image is limited to 5 MiB and one Request to 16 MiB of image data. Runtime-private files are deleted after execution; Hosts that need conversation history should persist their own attachment metadata and content.
+
 ## Deployment
 
 ### Railway
@@ -284,6 +308,15 @@ Cancellation and timeouts use the same durable path: the Server records the requ
 
 Agents may use temporary directories, existing local directories, Git mirrors, or isolated worktrees. A runtime fixed to a remote Node resolves local workspace paths on that Node, not on the Server.
 
+Workspace is an infrastructure contract, not a project-management model. Relay
+does not know about conversations, issues, repositories owned by a product, or
+review workflows. A caller may attach an opaque `reuse_key` and set
+`lifecycle=reusable` for a Git workspace when multiple Runs must share one
+prepared worktree. Relay scopes that key to the Git source, serializes users of
+the worktree, and leaves the caller responsible for assigning meaning and
+eventually requesting lifecycle cleanup. `branch` is an optional Git-provider
+hint; it has no workflow semantics inside Relay.
+
 ### Capabilities
 
 Applications expose domain operations without adding domain semantics to Relay Core. A runtime calls `relay-tool`, Relay validates the Run grant and resource scope, and then invokes the configured binding.
@@ -315,6 +348,7 @@ Long-running runtimes can create approval or input interactions, pause, and resu
 - The legacy `exec` protocol remains available for compatible non-interactive CLIs but only produces complete messages.
 - Trae exec mode cannot use `permission_mode=default`, because a headless process cannot ask for approval. Omit it for the headless default, or use `bypass_permissions` or a headless-compatible `custom` policy.
 - Runtime subprocesses receive a restricted environment by default. Add variables explicitly through `pass_env` or `env` in the Node configuration.
+- Codex-like runtimes can declare durable output files by writing `.relay/artifacts.json` in the work directory before they finish. Each entry contains a relative `path`, a semantic `type`, and optional `name` and `content_type`, for example `{"artifacts":[{"path":"report.md","type":"report","content_type":"text/markdown"}]}`. Relay validates that declared files stay inside the workspace and uploads them separately from the runtime's final message.
 
 ## Development
 

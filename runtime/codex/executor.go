@@ -115,6 +115,14 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 	if err := os.MkdirAll(resultDir, 0o700); err != nil {
 		return relay.Result{}, err
 	}
+	if err := resetArtifactManifest(workDir); err != nil {
+		return relay.Result{}, err
+	}
+	imagePaths, cleanupImages, err := relay.MaterializeInputImages(workDir, execution.Input)
+	if err != nil {
+		return relay.Result{}, err
+	}
+	defer cleanupImages()
 	finalPath := filepath.Join(resultDir, fork.Name+"-last-message.txt")
 
 	bridge, err := toolbridge.StartFile(execution.Capabilities, filepath.Join(resultDir, "tool-bridge"))
@@ -160,6 +168,9 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 		args = append(args, "--ignore-rules")
 	}
 	args = append(args, config.ExtraArgs...)
+	for _, imagePath := range imagePaths {
+		args = append(args, "--image", imagePath)
+	}
 	args = append(args, "-")
 
 	command := exec.CommandContext(ctx, binary, args...)
@@ -183,6 +194,7 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64<<10), 4<<20)
 	threadID := ""
+	lastAgentMessage := ""
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		var event map[string]any
@@ -203,6 +215,7 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 			execution.Emit(ctx, "runtime."+fork.Name+"."+eventType, event)
 			if item, _ := event["item"].(map[string]any); item != nil && item["type"] == "agent_message" {
 				if text, _ := item["text"].(string); text != "" {
+					lastAgentMessage = text
 					execution.Emit(ctx, "assistant.message.completed", map[string]string{"text": text})
 				}
 			}
@@ -220,11 +233,25 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 	if err != nil {
 		return relay.Result{}, fmt.Errorf("relay %s: read final message: %w", fork.Name, err)
 	}
-	output, _ := json.Marshal(map[string]any{"thread_id": threadID, "message": string(message), "work_dir": workDir})
+	finalMessage := strings.TrimSpace(lastAgentMessage)
+	if finalMessage == "" {
+		finalMessage = strings.TrimSpace(string(message))
+	}
+	if err := os.WriteFile(finalPath, []byte(finalMessage), 0o600); err != nil {
+		return relay.Result{}, fmt.Errorf("relay %s: normalize final message: %w", fork.Name, err)
+	}
+	output, _ := json.Marshal(map[string]any{"thread_id": threadID, "message": finalMessage, "work_dir": workDir})
 	if execution.Emit != nil {
+		execution.Emit(ctx, "assistant.final.completed", map[string]string{"text": finalMessage})
 		execution.Emit(ctx, "runtime."+fork.Name+".completed", map[string]string{"thread_id": threadID})
 	}
-	return relay.Result{Summary: strings.TrimSpace(string(message)), Output: output, Artifacts: []relay.Artifact{{Type: "instruction_file", Ref: instructionPath, Name: filepath.Base(instructionPath)}, {Type: fork.Name + "_final_message", Ref: finalPath, Name: filepath.Base(finalPath)}}}, nil
+	artifacts := []relay.Artifact{{Type: "instruction_file", Ref: instructionPath, Name: filepath.Base(instructionPath)}, {Type: fork.Name + "_final_message", Ref: finalPath, Name: filepath.Base(finalPath)}}
+	declared, err := collectDeclaredArtifacts(workDir)
+	if err != nil {
+		return relay.Result{}, fmt.Errorf("relay %s: collect artifacts: %w", fork.Name, err)
+	}
+	artifacts = append(artifacts, declared...)
+	return relay.Result{Summary: finalMessage, Output: output, Artifacts: artifacts}, nil
 }
 
 func runtimeEnv(config Config, bridgeDir, toolToken string, forkEnv []string) []string {

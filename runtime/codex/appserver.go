@@ -67,6 +67,14 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	if err := os.MkdirAll(resultDir, 0o700); err != nil {
 		return relay.Result{}, err
 	}
+	if err := resetArtifactManifest(workDir); err != nil {
+		return relay.Result{}, err
+	}
+	imagePaths, cleanupImages, err := relay.MaterializeInputImages(workDir, execution.Input)
+	if err != nil {
+		return relay.Result{}, err
+	}
+	defer cleanupImages()
 	finalPath := filepath.Join(resultDir, fork.Name+"-last-message.txt")
 	bridge, err := toolbridge.StartFile(execution.Capabilities, filepath.Join(resultDir, "tool-bridge"))
 	if err != nil {
@@ -141,11 +149,16 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 		return relay.Result{}, fmt.Errorf("relay %s: invalid thread/start response", fork.Name)
 	}
 	threadID := started.Thread.ID
-	if err := writeRequest(map[string]any{"id": 3, "method": "turn/start", "params": map[string]any{"threadId": threadID, "input": []map[string]string{{"type": "text", "text": execution.Instructions.Prompt}}}}); err != nil {
+	turnInput := []map[string]string{{"type": "text", "text": execution.Instructions.Prompt}}
+	for _, imagePath := range imagePaths {
+		turnInput = append(turnInput, map[string]string{"type": "localImage", "path": imagePath})
+	}
+	if err := writeRequest(map[string]any{"id": 3, "method": "turn/start", "params": map[string]any{"threadId": threadID, "input": turnInput}}); err != nil {
 		return relay.Result{}, err
 	}
 
 	var message strings.Builder
+	messageItemID := ""
 	turnStarted := false
 	turnCompleted := false
 	for scanner.Scan() {
@@ -163,16 +176,24 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 		emitAppServerEvent(ctx, execution, fork.Name, rpc)
 		if rpc.Method == "item/agentMessage/delta" {
 			var params struct {
-				Delta string `json:"delta"`
+				ItemID string `json:"itemId"`
+				Delta  string `json:"delta"`
 			}
 			_ = json.Unmarshal(rpc.Params, &params)
+			if params.ItemID != "" && messageItemID != "" && params.ItemID != messageItemID {
+				message.Reset()
+			}
+			if params.ItemID != "" {
+				messageItemID = params.ItemID
+			}
 			message.WriteString(params.Delta)
 			if execution.Emit != nil && params.Delta != "" {
-				execution.Emit(ctx, "assistant.message.delta", map[string]string{"delta": params.Delta})
+				execution.Emit(ctx, "assistant.message.delta", map[string]string{"delta": params.Delta, "item_id": params.ItemID})
 			}
 		}
-		if rpc.Method == "item/completed" && message.Len() == 0 {
+		if rpc.Method == "item/completed" {
 			if text := completedAgentMessage(rpc.Params); text != "" {
+				message.Reset()
 				message.WriteString(text)
 				if execution.Emit != nil {
 					execution.Emit(ctx, "assistant.message.completed", map[string]string{"text": text})
@@ -215,9 +236,16 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	}
 	output, _ := json.Marshal(map[string]any{"thread_id": threadID, "message": finalMessage, "work_dir": workDir})
 	if execution.Emit != nil {
+		execution.Emit(ctx, "assistant.final.completed", map[string]string{"text": finalMessage})
 		execution.Emit(ctx, "runtime."+fork.Name+".completed", map[string]string{"thread_id": threadID})
 	}
-	return relay.Result{Summary: finalMessage, Output: output, Artifacts: []relay.Artifact{{Type: "instruction_file", Ref: instructionPath, Name: filepath.Base(instructionPath)}, {Type: fork.Name + "_final_message", Ref: finalPath, Name: filepath.Base(finalPath)}}}, nil
+	artifacts := []relay.Artifact{{Type: "instruction_file", Ref: instructionPath, Name: filepath.Base(instructionPath)}, {Type: fork.Name + "_final_message", Ref: finalPath, Name: filepath.Base(finalPath)}}
+	declared, err := collectDeclaredArtifacts(workDir)
+	if err != nil {
+		return relay.Result{}, fmt.Errorf("relay %s: collect artifacts: %w", fork.Name, err)
+	}
+	artifacts = append(artifacts, declared...)
+	return relay.Result{Summary: finalMessage, Output: output, Artifacts: artifacts}, nil
 }
 
 func waitRPCResponse(scanner *bufio.Scanner, id int, onNotification func(rpcMessage)) (json.RawMessage, error) {

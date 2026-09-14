@@ -42,7 +42,7 @@ printf '%s' 'TRAE_RUNTIME_OK' > "$out"
 	if result.Summary != "TRAE_RUNTIME_OK" {
 		t.Fatalf("summary=%q", result.Summary)
 	}
-	if len(events) != 3 || events[1] != "runtime.trae.thread.started" {
+	if len(events) != 4 || events[1] != "runtime.trae.thread.started" || events[2] != "assistant.final.completed" {
 		t.Fatalf("events=%v", events)
 	}
 	if result.Artifacts[1].Type != "trae_final_message" {

@@ -399,6 +399,12 @@ Relay 已实现真实 Codex Runtime Adapter，使用 OpenAI 官方稳定的 `cod
 当前也已支持 `app-server` 协议的增量输出和模型发现。每次执行仍启动新线程，尚未提供
 原生 Session Resume；通用 Interaction 接口存在并不意味着每个 Runtime 已接通原生审批。
 
+Codex-like Runtime 可以在结束前写入 `.relay/artifacts.json`，声明需要独立上传的业务交付
+文件。每项包含相对工作目录的 `path`、语义化 `type`，以及可选的 `name` 和
+`content_type`。Node 会在每次执行前清理旧清单，执行后校验文件存在、为普通文件且解析
+后的真实路径仍位于工作目录内，再将它们作为独立 Artifact 上传。`.relay/` 内部文件不可
+被声明为业务交付物；Runtime 最终消息仍是 Run Summary，不自动等价于 Artifact。
+
 ### 10.2 TraeCode
 
 TraeCode CLI fork 自 Codex，并保留 `exec`、stdin Prompt、JSONL Event、最终消息文件、

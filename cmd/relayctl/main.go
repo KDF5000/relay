@@ -333,6 +333,9 @@ func runSubmit(ctx context.Context, client *sdk.Client, args []string, stdout, s
 	workspaceRef := flags.String("workspace-ref", "", "Git ref for a git workspace")
 	workspaceSubdir := flags.String("workspace-subdir", "", "subdirectory inside the prepared workspace")
 	workspaceEphemeral := flags.Bool("workspace-ephemeral", false, "remove a prepared temp workspace after completion")
+	workspaceReuseKey := flags.String("workspace-reuse-key", "", "opaque identity used to reuse a prepared workspace")
+	workspaceLifecycle := flags.String("workspace-lifecycle", "", "workspace lifecycle: attempt (default) or reusable")
+	workspaceBranch := flags.String("workspace-branch", "", "branch created for a reusable Git workspace")
 	var grants stringList
 	var labels keyValues
 	flags.Var(&grants, "grant", "capability grant name@version:effect:resource1,resource2 (repeatable)")
@@ -378,7 +381,7 @@ func runSubmit(ctx context.Context, client *sdk.Client, args []string, stdout, s
 		Principal:      relay.Principal{Type: *principalType, ID: *principalID},
 		Retry:          relay.RetryPolicy{MaxAttempts: *maxAttempts, Backoff: *retryBackoff},
 		Timeout:        *timeout,
-		Workspace:      relay.WorkspaceSpec{Kind: *workspaceKind, Source: *workspaceSource, Ref: *workspaceRef, Subdir: *workspaceSubdir, Ephemeral: *workspaceEphemeral},
+		Workspace:      relay.WorkspaceSpec{Kind: *workspaceKind, Source: *workspaceSource, Ref: *workspaceRef, Subdir: *workspaceSubdir, Ephemeral: *workspaceEphemeral, ReuseKey: *workspaceReuseKey, Lifecycle: *workspaceLifecycle, Branch: *workspaceBranch},
 	})
 	if err != nil {
 		return err

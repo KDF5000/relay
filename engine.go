@@ -147,5 +147,8 @@ func validateRequest(request Request) error {
 	if request.AgentID == "" || request.IdempotencyKey == "" || request.Input.Prompt == "" {
 		return errors.New("relay: agent ID, idempotency key, and input prompt are required")
 	}
+	if _, err := InputImages(request.Input); err != nil {
+		return err
+	}
 	return nil
 }

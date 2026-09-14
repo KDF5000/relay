@@ -38,8 +38,9 @@ command -v relay-tool >/dev/null || exit 9
 [ "$RELAY_TEST_ALLOWED" = "allowed" ] || exit 13
 [ "$model" = "per-agent-model" ] || exit 14
 printf '%s\n' '{"type":"thread.started","thread_id":"thread-real"}'
-printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}'
-printf '%s' 'Codex completed the real adapter contract' > "$out"
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Let me inspect the adapter."}}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Codex completed the real adapter contract"}}'
+printf '%s' 'Let me inspect the adapter.Codex completed the real adapter contract' > "$out"
 `
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -55,7 +56,7 @@ printf '%s' 'Codex completed the real adapter contract' > "$out"
 	if result.Summary != "Codex completed the real adapter contract" {
 		t.Fatalf("unexpected summary: %q", result.Summary)
 	}
-	if len(events) != 5 || events[1] != "runtime.codex.thread.started" || events[2] != "runtime.codex.item.completed" || events[3] != "assistant.message.completed" {
+	if len(events) != 8 || events[1] != "runtime.codex.thread.started" || events[2] != "runtime.codex.item.completed" || events[3] != "assistant.message.completed" || events[6] != "assistant.final.completed" {
 		t.Fatalf("unexpected events: %v", events)
 	}
 	content, err := os.ReadFile(filepath.Join(dir, "run-1", "AGENTS.md"))
@@ -64,6 +65,41 @@ printf '%s' 'Codex completed the real adapter contract' > "$out"
 	}
 	if !strings.Contains(string(content), "stable rules") {
 		t.Fatalf("instructions not materialized: %s", content)
+	}
+}
+
+func TestExecutorPassesMaterializedImagesToCodex(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+out=""
+image=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then out="$2"; shift 2; continue; fi
+  if [ "$1" = "--image" ]; then image="$2"; shift 2; continue; fi
+  shift
+done
+[ -f "$image" ] || exit 20
+[ "$(wc -c < "$image" | tr -d ' ')" = "8" ] || exit 21
+cat >/dev/null
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"image received"}}'
+printf '%s' 'image received' > "$out"
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executor := runtimecodex.Executor{Config: runtimecodex.Config{Binary: fake, WorkRoot: dir, Ephemeral: true}}
+	result, err := executor.Execute(context.Background(), relay.Execution{
+		RunID:        "run-image",
+		Input:        relay.Input{Prompt: "inspect", Data: []byte(`{"images":[{"name":"screen.png","content_type":"image/png","data":"iVBORw0KGgo="}]}`)},
+		Instructions: relay.CompiledInstructions{Prompt: "inspect"},
+		Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary != "image received" {
+		t.Fatalf("summary = %q", result.Summary)
 	}
 }
 
@@ -110,26 +146,31 @@ read -r thread_start
 printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-stream"}}}'
 read -r turn_start
 printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1"}}}'
-printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-stream","turnId":"turn-1","itemId":"item-1","delta":"hello "}}'
-printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-stream","turnId":"turn-1","itemId":"item-1","delta":"world"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-stream","turnId":"turn-1","itemId":"progress-1","delta":"Let me inspect this."}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-stream","turnId":"turn-1","itemId":"final-1","delta":"hello "}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-stream","turnId":"turn-1","itemId":"final-1","delta":"world"}}'
 printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-stream","turn":{"id":"turn-1","items":[],"status":"completed"}}}'
 `
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var deltas []string
+	var final string
 	executor := runtimecodex.Executor{Config: runtimecodex.Config{Binary: fake, Protocol: "app-server", WorkRoot: dir, Ephemeral: true}}
 	result, err := executor.Execute(context.Background(), relay.Execution{RunID: "run-stream", Instructions: relay.CompiledInstructions{Stable: "rules", Prompt: "say hello"}, Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{}), Emit: func(_ context.Context, event string, data any) {
 		if event == "assistant.message.delta" {
 			value := data.(map[string]string)
 			deltas = append(deltas, value["delta"])
 		}
+		if event == "assistant.final.completed" {
+			final = data.(map[string]string)["text"]
+		}
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Summary != "hello world" || strings.Join(deltas, "") != "hello world" {
-		t.Fatalf("result=%q deltas=%q", result.Summary, deltas)
+	if result.Summary != "hello world" || final != "hello world" || strings.Join(deltas, "") != "Let me inspect this.hello world" {
+		t.Fatalf("result=%q final=%q deltas=%q", result.Summary, final, deltas)
 	}
 }
 

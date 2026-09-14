@@ -133,6 +133,9 @@ func (s *Service) Submit(ctx context.Context, request relay.Request) (relay.Run,
 	if request.AgentID == "" || request.IdempotencyKey == "" || request.Input.Prompt == "" || request.Runtime.Provider == "" {
 		return relay.Run{}, errors.New("agent ID, idempotency key, prompt, and runtime provider are required")
 	}
+	if _, err := relay.InputImages(request.Input); err != nil {
+		return relay.Run{}, err
+	}
 	if request.Retry.MaxAttempts <= 0 {
 		request.Retry.MaxAttempts = 1
 	}
