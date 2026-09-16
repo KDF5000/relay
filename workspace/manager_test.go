@@ -79,6 +79,34 @@ func TestReusableGitWorkspacePersistsAcrossAttempts(t *testing.T) {
 	if err != nil || string(content) != "preserved\n" {
 		t.Fatalf("preserved content = %q, %v", content, err)
 	}
+	command := exec.Command("git", "rev-parse", "--verify", "HEAD^{commit}")
+	command.Dir = second.Dir
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("reusable workspace lost HEAD after refresh: %v: %s", err, output)
+	}
+}
+
+func TestReusableGitWorkspaceRejectsMissingHead(t *testing.T) {
+	source := gitSource(t)
+	manager := &workspace.Manager{Root: t.TempDir()}
+	spec := relay.WorkspaceSpec{
+		Kind:      "git",
+		Source:    source,
+		Lifecycle: "reusable",
+		ReuseKey:  "missing-head",
+		Branch:    "agent/missing-head",
+	}
+	prepared, err := manager.Prepare(context.Background(), "run-1", "attempt-1", spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepared.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, prepared.Dir, "update-ref", "-d", "refs/heads/agent/missing-head")
+	if _, err := manager.Prepare(context.Background(), "run-2", "attempt-2", spec); err == nil {
+		t.Fatal("reusable workspace without HEAD was accepted")
+	}
 }
 
 func TestReusableGitWorkspaceSerializesUsers(t *testing.T) {

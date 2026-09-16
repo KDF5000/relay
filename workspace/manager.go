@@ -150,8 +150,14 @@ func (m *Manager) prepareGit(ctx context.Context, root, runID, attemptID string,
 		}
 	} else if err != nil {
 		return Prepared{}, err
-	} else if err := runGit(ctx, mirror, "fetch", "--prune", "origin"); err != nil {
-		return Prepared{}, err
+	} else {
+		// The mirror also owns local branches used by reusable worktrees. Pruning a
+		// mirror fetch deletes those branches when they do not exist on origin,
+		// leaving the attached worktree on an unborn HEAD. Refresh remote refs
+		// without pruning so Relay-owned workspace branches remain intact.
+		if err := runGit(ctx, mirror, "fetch", "origin"); err != nil {
+			return Prepared{}, err
+		}
 	}
 	if reusable {
 		if info, err := os.Stat(worktree); err == nil {
@@ -160,6 +166,9 @@ func (m *Manager) prepareGit(ctx context.Context, root, runID, attemptID string,
 			}
 			if err := runGit(ctx, worktree, "rev-parse", "--is-inside-work-tree"); err != nil {
 				return Prepared{}, fmt.Errorf("relay workspace: reusable workspace is invalid: %w", err)
+			}
+			if err := runGit(ctx, worktree, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
+				return Prepared{}, fmt.Errorf("relay workspace: reusable workspace has no valid HEAD; preserve pending changes and recreate it: %w", err)
 			}
 			m.mu.Unlock()
 			locked = false

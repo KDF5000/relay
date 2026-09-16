@@ -5,8 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"github.com/KDF5000/relay/transport/httpapi"
-	"github.com/KDF5000/relay/workspace"
 	"io"
 	"os"
 	"os/exec"
@@ -14,6 +12,9 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/KDF5000/relay/transport/httpapi"
+	"github.com/KDF5000/relay/workspace"
 )
 
 type inspectionTransport interface {
@@ -44,7 +45,7 @@ func (w *Worker) serveInspections(ctx context.Context) {
 			result, err = inspectDirectory(inspectCtx, root, request.Operation, request.Path)
 			cancel()
 		} else {
-			err = errors.New("workspace unavailable on this node; rerun the session after node restart")
+			err = errors.New("workspace unavailable on this node for this run")
 		}
 		if err != nil {
 			result.Error = err.Error()
@@ -102,7 +103,8 @@ func inspectDirectory(ctx context.Context, root, operation, path string) (httpap
 		if err != nil {
 			return result, err
 		}
-		command.Stderr = io.Discard
+		var stderr strings.Builder
+		command.Stderr = &stderr
 		if err = command.Start(); err != nil {
 			return result, err
 		}
@@ -117,7 +119,11 @@ func inspectDirectory(ctx context.Context, root, operation, path string) (httpap
 			return result, err
 		}
 		if waitErr != nil {
-			return result, errors.New("Git diff unavailable for this workspace")
+			message := strings.TrimSpace(stderr.String())
+			if message == "" {
+				message = waitErr.Error()
+			}
+			return result, fmt.Errorf("Git diff unavailable for this workspace: %s", message)
 		}
 		result.Content = string(data)
 		return result, nil
