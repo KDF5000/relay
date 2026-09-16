@@ -398,7 +398,7 @@ func (c *Client) do(ctx context.Context, method, path string, input, output any)
 		if protocolErr != nil {
 			return fmt.Errorf("%w: %s", protocolErr, message)
 		}
-		return fmt.Errorf("relay HTTP %s: %s", response.Status, message)
+		return &HTTPError{StatusCode: response.StatusCode, Status: response.Status, Message: message}
 	}
 	if output == nil || len(responseBody) == 0 {
 		return nil
@@ -408,3 +408,16 @@ func (c *Client) do(ctx context.Context, method, path string, input, output any)
 	}
 	return nil
 }
+
+// HTTPError preserves the status for callers deciding whether delivery can retry.
+type HTTPError struct {
+	StatusCode int
+	Status     string
+	Message    string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("relay HTTP %s: %s", e.Status, e.Message)
+}
+
+func (e *HTTPError) HTTPStatusCode() int { return e.StatusCode }

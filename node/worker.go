@@ -48,19 +48,21 @@ func (m ExecutorMap) Resolve(provider string) (relay.Executor, bool) {
 }
 
 type Worker struct {
-	Registration controlplane.NodeRegistration
-	ControlPlane ControlPlane
-	Bindings     *binding.Registry
-	Executors    ExecutorResolver
-	Compiler     relay.InstructionCompiler
-	Workspaces   workspace.Provider
-	Outbox       *Outbox
+	Registration   controlplane.NodeRegistration
+	ControlPlane   ControlPlane
+	Bindings       *binding.Registry
+	Executors      ExecutorResolver
+	Compiler       relay.InstructionCompiler
+	Workspaces     workspace.Provider
+	Outbox         *Outbox
+	inspectionDirs sync.Map
 }
 
 // RunPool runs one claim loop per configured capacity slot. Cancelling
 // claimCtx stops new assignments while executionCtx remains alive so callers
 // can drain in-flight runtimes before forcing shutdown.
 func (w *Worker) RunPool(claimCtx, executionCtx context.Context, poll time.Duration, onError func(error)) {
+	go w.serveInspections(claimCtx)
 	capacity := w.Registration.Capacity
 	if capacity <= 0 {
 		capacity = 1
@@ -143,6 +145,7 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 			return relay.Run{}, prepareErr
 		}
 		workDir, cleanupWorkspace = prepared.Dir, prepared.Cleanup
+		w.rememberInspection(assignment.RunID, workDir)
 		assignment.Request.Instructions.Workspace = append(
 			assignment.Request.Instructions.Workspace,
 			relay.InstructionFragment{

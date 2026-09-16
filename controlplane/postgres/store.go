@@ -487,6 +487,11 @@ func (s *Store) Start(ctx context.Context, assignment controlplane.Assignment) e
 }
 
 func (s *Store) AppendEvent(ctx context.Context, runID, attemptID, lease, eventType string, data any, eventIDs ...string) error {
+	encoded, err := marshalEventData(data)
+	if err != nil {
+		return err
+	}
+	data = json.RawMessage(encoded)
 	assignment := controlplane.Assignment{RunID: runID, AttemptID: attemptID, LeaseToken: lease}
 	return s.transition(ctx, assignment, func(tx pgx.Tx, run relay.Run) error {
 		if run.Attempt.Status != relay.AttemptRunning {
@@ -503,10 +508,6 @@ func (s *Store) AppendEvent(ctx context.Context, runID, attemptID, lease, eventT
 			return controlplane.SameEvent(oldType, oldData, eventType, data)
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		encoded, err := json.Marshal(data)
-		if err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO relay_events (id,run_id,attempt_id,sequence,type,data,created_at) SELECT $1,$2,$3,COALESCE(MAX(sequence),0)+1,$4,$5,now() FROM relay_events WHERE run_id=$2`, id, runID, attemptID, eventType, encoded)
@@ -944,7 +945,7 @@ func insertEvent(ctx context.Context, tx pgx.Tx, runID, attemptID string, sequen
 	var data []byte
 	var err error
 	if value != nil {
-		data, err = json.Marshal(value)
+		data, err = marshalEventData(value)
 		if err != nil {
 			return err
 		}

@@ -32,6 +32,13 @@ func deliverEvent(ctx context.Context, cp ControlPlane, a controlplane.Assignmen
 		if errors.Is(err, controlplane.ErrInvalidLease) || errors.Is(err, controlplane.ErrInvalidTransition) || errors.Is(err, controlplane.ErrRunCancelled) || errors.Is(err, controlplane.ErrNotFound) {
 			return err
 		}
+		var httpError interface{ HTTPStatusCode() int }
+		if errors.As(err, &httpError) {
+			switch httpError.HTTPStatusCode() {
+			case 400, 413, 422:
+				return err
+			}
+		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-deliveryCtx.Done():

@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/KDF5000/relay"
 	"github.com/KDF5000/relay/controlplane"
@@ -54,6 +55,28 @@ func TestProducerEventDeduplication(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("count=%d", count)
+	}
+	for i := 0; i < 3; i++ {
+		if err := client.AppendEvent(ctx, run.ID, a.AttemptID, a.LeaseToken, "runtime.trae.item.commandExecution.outputDelta", map[string]string{"delta": "hello\x00中文\n"}, "nul-event"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err = client.Events(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nulCount := 0
+	for _, event := range events {
+		if event.Type == "runtime.trae.item.commandExecution.outputDelta" {
+			nulCount++
+			var data map[string]string
+			if err := json.Unmarshal(event.Data, &data); err != nil || data["delta"] != `hello\0中文`+"\n" {
+				t.Fatalf("unexpected sanitized event: %s, %v", event.Data, err)
+			}
+		}
+	}
+	if nulCount != 1 {
+		t.Fatalf("NUL event count=%d", nulCount)
 	}
 	result := relay.Result{Summary: "done"}
 	if err := client.Complete(ctx, a, result); err != nil {

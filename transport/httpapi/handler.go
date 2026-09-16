@@ -16,10 +16,11 @@ import (
 )
 
 type Handler struct {
-	service *controlplane.Service
-	mux     *http.ServeMux
-	handler http.Handler
-	auth    Authenticator
+	service     *controlplane.Service
+	mux         *http.ServeMux
+	handler     http.Handler
+	auth        Authenticator
+	inspections inspectionBroker
 }
 
 //go:embed console/*
@@ -31,6 +32,10 @@ func NewHandler(service *controlplane.Service) *Handler {
 
 func NewHandlerWithAuth(service *controlplane.Service, auth Authenticator) *Handler {
 	h := &Handler{service: service, mux: http.NewServeMux(), auth: auth}
+	h.inspections.calls = make(map[string]*inspectionCall)
+	h.mux.HandleFunc("GET /v1/runs/{runID}/workspace", h.inspect)
+	h.mux.HandleFunc("POST /v1/nodes/{nodeID}/inspections/claim", h.claimInspection)
+	h.mux.HandleFunc("POST /v1/nodes/{nodeID}/inspections/{inspectionID}", h.finishInspection)
 	assets, err := fs.Sub(consoleFiles, "console")
 	if err != nil {
 		panic(err)
