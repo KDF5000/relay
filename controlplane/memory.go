@@ -27,6 +27,12 @@ type MemoryStorage struct {
 	capabilityCalls map[string]memoryCapabilityCall
 	attemptHistory  map[string][]relay.Attempt
 	interactions    map[string]*relay.Interaction
+	runtimeSessions map[string]memoryRuntimeSession
+}
+
+type memoryRuntimeSession struct {
+	nativeID string
+	nodeID   string
 }
 
 type memoryCapabilityCall struct {
@@ -35,7 +41,11 @@ type memoryCapabilityCall struct {
 }
 
 func NewMemoryStorage() *MemoryStorage {
-	return &MemoryStorage{nodes: make(map[string]*Node), runs: make(map[string]*relay.Run), requests: make(map[string]relay.Request), events: make(map[string][]relay.Event), byIdempotency: make(map[string]string), artifacts: make(map[string]relay.Artifact), artifactRuns: make(map[string][]string), capabilityCalls: make(map[string]memoryCapabilityCall), attemptHistory: make(map[string][]relay.Attempt), interactions: make(map[string]*relay.Interaction)}
+	return &MemoryStorage{nodes: make(map[string]*Node), runs: make(map[string]*relay.Run), requests: make(map[string]relay.Request), events: make(map[string][]relay.Event), byIdempotency: make(map[string]string), artifacts: make(map[string]relay.Artifact), artifactRuns: make(map[string][]string), capabilityCalls: make(map[string]memoryCapabilityCall), attemptHistory: make(map[string][]relay.Attempt), interactions: make(map[string]*relay.Interaction), runtimeSessions: make(map[string]memoryRuntimeSession)}
+}
+
+func runtimeSessionKey(request relay.Request) string {
+	return request.TenantID + "\x00" + request.ProjectID + "\x00" + request.SessionID + "\x00" + request.AgentID + "\x00" + request.Runtime.ID + "\x00" + request.Runtime.Provider
 }
 
 func (s *MemoryStorage) RegisterNode(_ context.Context, registration NodeRegistration) (Node, error) {
@@ -114,6 +124,10 @@ func (s *MemoryStorage) Claim(_ context.Context, nodeID string, leaseTTL time.Du
 		if !nodeMatches(*node, request) {
 			continue
 		}
+		runtimeSession := s.runtimeSessions[runtimeSessionKey(request)]
+		if runtimeSession.nodeID != nodeID {
+			runtimeSession = memoryRuntimeSession{}
+		}
 		run.Attempt.Status = relay.AttemptLeased
 		run.Attempt.NodeID = nodeID
 		run.Attempt.LeaseToken = newControlPlaneID("lease")
@@ -121,7 +135,7 @@ func (s *MemoryStorage) Claim(_ context.Context, nodeID string, leaseTTL time.Du
 		expires := now.Add(leaseTTL)
 		run.Attempt.LeaseExpiresAt = &expires
 		s.appendEvent(run, "attempt.leased", map[string]any{"node_id": nodeID, "lease_expires_at": expires})
-		return Assignment{RunID: run.ID, AttemptID: run.Attempt.ID, LeaseToken: run.Attempt.LeaseToken, LeaseExpiresAt: expires, Request: request}, nil
+		return Assignment{RunID: run.ID, AttemptID: run.Attempt.ID, LeaseToken: run.Attempt.LeaseToken, LeaseExpiresAt: expires, Request: request, RuntimeSessionID: runtimeSession.nativeID}, nil
 	}
 	return Assignment{}, ErrNoAssignment
 }
@@ -300,6 +314,9 @@ func (s *MemoryStorage) Complete(_ context.Context, assignment Assignment, resul
 	now := time.Now().UTC()
 	run.Status, run.Result, run.CompletedAt = relay.RunSucceeded, &result, &now
 	run.Attempt.Status, run.Attempt.CompletedAt = relay.AttemptSucceeded, &now
+	if request := s.requests[run.ID]; request.SessionID != "" && result.RuntimeSessionID != "" {
+		s.runtimeSessions[runtimeSessionKey(request)] = memoryRuntimeSession{nativeID: result.RuntimeSessionID, nodeID: run.Attempt.NodeID}
+	}
 	s.releaseNode(run.Attempt.NodeID)
 	s.appendEvent(run, "attempt.succeeded", nil)
 	s.appendEvent(run, "run.succeeded", result)

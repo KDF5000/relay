@@ -91,6 +91,79 @@ func TestSchedulerCanBindRunToRuntimeInstance(t *testing.T) {
 	}
 }
 
+func TestCompletedRunPersistsRuntimeSessionForNextTurn(t *testing.T) {
+	ctx := context.Background()
+	service := controlplane.New(time.Minute)
+	for _, nodeID := range []string{"node-a", "node-b"} {
+		if _, err := service.RegisterNode(ctx, controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: nodeID, Runtimes: []controlplane.Runtime{{Provider: "codex"}}, Capacity: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := relay.Request{
+		TenantID: "tenant", ProjectID: "project", SessionID: "session", AgentID: "agent",
+		IdempotencyKey: "turn-1", Runtime: relay.RuntimeRequirement{Provider: "codex"}, Input: relay.Input{Prompt: "first"},
+	}
+	if _, err := service.Submit(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Claim(ctx, "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Complete(ctx, first, relay.Result{Summary: "done", RuntimeSessionID: "native-thread"}); err != nil {
+		t.Fatal(err)
+	}
+
+	request.IdempotencyKey = "turn-2"
+	request.Input.Prompt = "second"
+	if _, err := service.Submit(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	otherNode, err := service.Claim(ctx, "node-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherNode.RuntimeSessionID != "" {
+		t.Fatalf("runtime session leaked to a different node: %q", otherNode.RuntimeSessionID)
+	}
+}
+
+func TestRuntimeSessionResumesOnTheSameNode(t *testing.T) {
+	ctx := context.Background()
+	service := controlplane.New(time.Minute)
+	if _, err := service.RegisterNode(ctx, controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "node", Runtimes: []controlplane.Runtime{{Provider: "codex"}}, Capacity: 1}); err != nil {
+		t.Fatal(err)
+	}
+	request := relay.Request{SessionID: "session", AgentID: "agent", IdempotencyKey: "turn-1", Runtime: relay.RuntimeRequirement{Provider: "codex"}, Input: relay.Input{Prompt: "first"}}
+	if _, err := service.Submit(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Claim(ctx, "node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Complete(ctx, first, relay.Result{Summary: "done", RuntimeSessionID: "native-thread"}); err != nil {
+		t.Fatal(err)
+	}
+	request.IdempotencyKey = "turn-2"
+	if _, err := service.Submit(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Claim(ctx, "node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.RuntimeSessionID != "native-thread" {
+		t.Fatalf("runtime session = %q", second.RuntimeSessionID)
+	}
+}
+
 func TestExpiredUnstartedLeaseReturnsToQueue(t *testing.T) {
 	ctx := context.Background()
 	service := controlplane.New(time.Nanosecond)

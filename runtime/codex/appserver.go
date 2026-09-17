@@ -126,17 +126,47 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	if err := writeRequest(map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
 		return relay.Result{}, err
 	}
-	threadParams := map[string]any{"cwd": workDir, "sandbox": sandbox, "approvalPolicy": "never", "ephemeral": config.Ephemeral}
+	threadParams := map[string]any{"cwd": workDir, "sandbox": sandbox, "approvalPolicy": "never"}
 	if config.Model != "" {
 		threadParams["model"] = config.Model
 	}
 	if config.ServiceTier != "" {
 		threadParams["serviceTier"] = config.ServiceTier
 	}
-	if err := writeRequest(map[string]any{"id": 2, "method": "thread/start", "params": threadParams}); err != nil {
+	threadMethod := "thread/start"
+	threadRequestID := 2
+	turnRequestID := 3
+	prompt := execution.Instructions.Prompt
+	resuming := execution.RuntimeSessionID != "" && !config.Ephemeral
+	if resuming {
+		threadMethod = "thread/resume"
+		threadParams["threadId"] = execution.RuntimeSessionID
+		threadParams["excludeTurns"] = true
+	} else {
+		threadParams["ephemeral"] = config.Ephemeral
+	}
+	if err := writeRequest(map[string]any{"id": threadRequestID, "method": threadMethod, "params": threadParams}); err != nil {
 		return relay.Result{}, err
 	}
-	threadResponse, err := waitRPCResponse(scanner, 2, func(message rpcMessage) { emitAppServerEvent(ctx, execution, fork.Name, message) })
+	threadResponse, err := waitRPCResponse(scanner, threadRequestID, func(message rpcMessage) { emitAppServerEvent(ctx, execution, fork.Name, message) })
+	if err != nil && resuming {
+		if execution.Emit != nil {
+			execution.Emit(ctx, "runtime."+fork.Name+".thread.resume_failed", map[string]string{"thread_id": execution.RuntimeSessionID, "error": err.Error()})
+		}
+		delete(threadParams, "threadId")
+		delete(threadParams, "excludeTurns")
+		threadParams["ephemeral"] = config.Ephemeral
+		threadMethod = "thread/start"
+		threadRequestID = 4
+		turnRequestID = 5
+		if execution.FallbackPrompt != "" {
+			prompt = execution.FallbackPrompt
+		}
+		if err := writeRequest(map[string]any{"id": threadRequestID, "method": threadMethod, "params": threadParams}); err != nil {
+			return relay.Result{}, err
+		}
+		threadResponse, err = waitRPCResponse(scanner, threadRequestID, func(message rpcMessage) { emitAppServerEvent(ctx, execution, fork.Name, message) })
+	}
 	if err != nil {
 		return relay.Result{}, appServerError(fork.Name, err, stderr.String())
 	}
@@ -146,14 +176,14 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 		} `json:"thread"`
 	}
 	if err := json.Unmarshal(threadResponse, &started); err != nil || started.Thread.ID == "" {
-		return relay.Result{}, fmt.Errorf("relay %s: invalid thread/start response", fork.Name)
+		return relay.Result{}, fmt.Errorf("relay %s: invalid %s response", fork.Name, threadMethod)
 	}
 	threadID := started.Thread.ID
-	turnInput := []map[string]string{{"type": "text", "text": execution.Instructions.Prompt}}
+	turnInput := []map[string]string{{"type": "text", "text": prompt}}
 	for _, imagePath := range imagePaths {
 		turnInput = append(turnInput, map[string]string{"type": "localImage", "path": imagePath})
 	}
-	if err := writeRequest(map[string]any{"id": 3, "method": "turn/start", "params": map[string]any{"threadId": threadID, "input": turnInput}}); err != nil {
+	if err := writeRequest(map[string]any{"id": turnRequestID, "method": "turn/start", "params": map[string]any{"threadId": threadID, "input": turnInput}}); err != nil {
 		return relay.Result{}, err
 	}
 
@@ -166,7 +196,7 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 		if err := json.Unmarshal(scanner.Bytes(), &rpc); err != nil {
 			continue
 		}
-		if rpc.ID == 3 {
+		if rpc.ID == turnRequestID {
 			if rpc.Error != nil {
 				return relay.Result{}, errors.New(rpc.Error.Message)
 			}
@@ -245,7 +275,11 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 		return relay.Result{}, fmt.Errorf("relay %s: collect artifacts: %w", fork.Name, err)
 	}
 	artifacts = append(artifacts, declared...)
-	return relay.Result{Summary: finalMessage, Output: output, Artifacts: artifacts}, nil
+	result = relay.Result{Summary: finalMessage, Output: output, Artifacts: artifacts}
+	if !config.Ephemeral {
+		result.RuntimeSessionID = threadID
+	}
+	return result, nil
 }
 
 func waitRPCResponse(scanner *bufio.Scanner, id int, onNotification func(rpcMessage)) (json.RawMessage, error) {

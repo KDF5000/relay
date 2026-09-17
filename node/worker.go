@@ -169,10 +169,20 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 	if len(assignment.Request.Capabilities) > 0 {
 		instructions.Runtime = append(append([]relay.InstructionFragment(nil), instructions.Runtime...), relay.CapabilityToolInstruction(assignment.Request.Capabilities))
 	}
-	compiled, err := compiler.Compile(assignment.Request.Input, instructions)
+	fallbackCompiled, err := compiler.Compile(assignment.Request.Input, instructions)
 	if err != nil {
 		_ = w.ControlPlane.Fail(ctx, assignment, err.Error())
 		return relay.Run{}, err
+	}
+	compiled := fallbackCompiled
+	if assignment.RuntimeSessionID != "" && assignment.Request.Input.ContinuationPrompt != "" {
+		continuationInput := assignment.Request.Input
+		continuationInput.Prompt = continuationInput.ContinuationPrompt
+		compiled, err = compiler.Compile(continuationInput, instructions)
+		if err != nil {
+			_ = w.ControlPlane.Fail(ctx, assignment, err.Error())
+			return relay.Run{}, err
+		}
 	}
 	if err := w.ControlPlane.Start(ctx, assignment); err != nil {
 		if errors.Is(err, controlplane.ErrRunCancelled) {
@@ -237,9 +247,11 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 		Runtime: assignment.Request.Runtime,
 		Source:  assignment.Request.Source, Input: assignment.Request.Input, Context: assignment.Request.Context,
 		Instructions: compiled, Capabilities: invoker,
-		WorkDir:      workDir,
-		Interactions: interactionBroker{controlPlane: w.ControlPlane, assignment: assignment},
-		Emit:         emit,
+		WorkDir:          workDir,
+		RuntimeSessionID: assignment.RuntimeSessionID,
+		FallbackPrompt:   fallbackCompiled.Prompt,
+		Interactions:     interactionBroker{controlPlane: w.ControlPlane, assignment: assignment},
+		Emit:             emit,
 	})
 	eventMu.Lock()
 	executionErr = errors.Join(executionErr, eventErr)

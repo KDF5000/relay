@@ -103,6 +103,79 @@ printf '%s' 'image received' > "$out"
 	}
 }
 
+func TestExecutorResumesPersistedThread(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+[ "$1" = "exec" ] || exit 20
+[ "$2" = "resume" ] || exit 21
+out=""
+session=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then out="$2"; shift 2; continue; fi
+  if [ "$1" = "native-thread" ]; then session="$1"; fi
+  shift
+done
+[ "$session" = "native-thread" ] || exit 22
+[ "$(cat)" = "current turn" ] || exit 23
+printf '%s\n' '{"type":"thread.started","thread_id":"native-thread"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"continued"}}'
+printf '%s' 'continued' > "$out"
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executor := runtimecodex.Executor{Config: runtimecodex.Config{Binary: fake, WorkRoot: dir}}
+	result, err := executor.Execute(context.Background(), relay.Execution{
+		RunID: "run-resume", RuntimeSessionID: "native-thread", Instructions: relay.CompiledInstructions{Prompt: "current turn"},
+		Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary != "continued" || result.RuntimeSessionID != "native-thread" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestExecutorRecoversWhenPersistedThreadIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+if [ "$1" = "exec" ] && [ "$2" = "resume" ]; then
+  cat >/dev/null
+  echo 'Error: no rollout found for thread id missing-thread' >&2
+  exit 1
+fi
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then out="$2"; shift 2; continue; fi
+  shift
+done
+[ "$(cat)" = "recovery transcript" ] || exit 24
+printf '%s\n' '{"type":"thread.started","thread_id":"replacement-thread"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"recovered"}}'
+printf '%s' 'recovered' > "$out"
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var resumeFailed bool
+	executor := runtimecodex.Executor{Config: runtimecodex.Config{Binary: fake, WorkRoot: dir}}
+	result, err := executor.Execute(context.Background(), relay.Execution{
+		RunID: "run-recover", RuntimeSessionID: "missing-thread", FallbackPrompt: "recovery transcript", Instructions: relay.CompiledInstructions{Prompt: "current turn"},
+		Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{}), Emit: func(_ context.Context, event string, _ any) {
+			resumeFailed = resumeFailed || event == "runtime.codex.thread.resume_failed"
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary != "recovered" || result.RuntimeSessionID != "replacement-thread" || !resumeFailed {
+		t.Fatalf("result=%+v resumeFailed=%v", result, resumeFailed)
+	}
+}
+
 func TestDangerousSandboxRequiresExplicitOptIn(t *testing.T) {
 	executor := runtimecodex.Executor{Config: runtimecodex.Config{Sandbox: "danger-full-access"}}
 	_, err := executor.Execute(context.Background(), relay.Execution{})
@@ -171,6 +244,45 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-stream","
 	}
 	if result.Summary != "hello world" || final != "hello world" || strings.Join(deltas, "") != "Let me inspect this.hello world" {
 		t.Fatalf("result=%q final=%q deltas=%q", result.Summary, final, deltas)
+	}
+}
+
+func TestAppServerFallsBackWhenPersistedThreadCannotResume(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+[ "$1" = "app-server" ] || exit 8
+read -r initialize
+printf '%s\n' '{"id":1,"result":{"userAgent":"fake"}}'
+read -r initialized
+read -r thread_resume
+case "$thread_resume" in *'"method":"thread/resume"'*'"threadId":"missing-thread"'*) ;; *) exit 20;; esac
+printf '%s\n' '{"id":2,"error":{"code":-32000,"message":"thread not found"}}'
+read -r thread_start
+case "$thread_start" in *'"method":"thread/start"'*) ;; *) exit 21;; esac
+printf '%s\n' '{"id":4,"result":{"thread":{"id":"replacement-thread"}}}'
+read -r turn_start
+case "$turn_start" in *'recovery context'*) ;; *) exit 22;; esac
+printf '%s\n' '{"id":5,"result":{"turn":{"id":"turn-2"}}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"replacement-thread","turnId":"turn-2","itemId":"final-1","delta":"recovered"}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"replacement-thread","turn":{"id":"turn-2","items":[],"status":"completed"}}}'
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var resumeFailed bool
+	executor := runtimecodex.Executor{Config: runtimecodex.Config{Binary: fake, Protocol: "app-server", WorkRoot: dir}}
+	result, err := executor.Execute(context.Background(), relay.Execution{
+		RunID: "run-recover", RuntimeSessionID: "missing-thread", FallbackPrompt: "recovery context", Instructions: relay.CompiledInstructions{Prompt: "current turn"},
+		Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{}), Emit: func(_ context.Context, event string, _ any) {
+			resumeFailed = resumeFailed || event == "runtime.codex.thread.resume_failed"
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary != "recovered" || result.RuntimeSessionID != "replacement-thread" || !resumeFailed {
+		t.Fatalf("result=%+v resumeFailed=%v", result, resumeFailed)
 	}
 }
 

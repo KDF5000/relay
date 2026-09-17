@@ -90,11 +90,12 @@ const (
 )
 
 type Assignment struct {
-	RunID          string        `json:"run_id"`
-	AttemptID      string        `json:"attempt_id"`
-	LeaseToken     string        `json:"lease_token"`
-	LeaseExpiresAt time.Time     `json:"lease_expires_at"`
-	Request        relay.Request `json:"request"`
+	RunID            string        `json:"run_id"`
+	AttemptID        string        `json:"attempt_id"`
+	LeaseToken       string        `json:"lease_token"`
+	LeaseExpiresAt   time.Time     `json:"lease_expires_at"`
+	Request          relay.Request `json:"request"`
+	RuntimeSessionID string        `json:"runtime_session_id,omitempty"`
 }
 
 type LeaseUpdate struct {

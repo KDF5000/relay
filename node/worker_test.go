@@ -163,6 +163,48 @@ func TestWorkerPinsExecutionToPreparedWorkspace(t *testing.T) {
 	}
 }
 
+func TestWorkerUsesContinuationPromptForPersistedRuntimeSession(t *testing.T) {
+	ctx := context.Background()
+	service := controlplane.New(time.Second)
+	var executions []relay.Execution
+	worker := &node.Worker{
+		Registration: controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "session-node", Runtimes: []controlplane.Runtime{{Provider: "test"}}, Capacity: 1},
+		ControlPlane: service,
+		Executors: node.ExecutorMap{"test": relay.ExecutorFunc(func(_ context.Context, execution relay.Execution) (relay.Result, error) {
+			executions = append(executions, execution)
+			return relay.Result{Summary: "done", RuntimeSessionID: "native-session"}, nil
+		})},
+	}
+	if _, err := worker.Register(ctx); err != nil {
+		t.Fatal(err)
+	}
+	request := relay.Request{SessionID: "chat", AgentID: "agent", IdempotencyKey: "turn-1", Runtime: relay.RuntimeRequirement{Provider: "test"}, Input: relay.Input{Prompt: "first turn"}}
+	if _, err := service.Submit(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	request.IdempotencyKey = "turn-2"
+	request.Input = relay.Input{Prompt: "full recovery transcript", ContinuationPrompt: "current turn only"}
+	if _, err := service.Submit(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(executions) != 2 {
+		t.Fatalf("executions = %d", len(executions))
+	}
+	second := executions[1]
+	if second.RuntimeSessionID != "native-session" || !strings.Contains(second.Instructions.Prompt, "current turn only") || strings.Contains(second.Instructions.Prompt, "full recovery transcript") {
+		t.Fatalf("unexpected resumed execution: %+v", second)
+	}
+	if !strings.Contains(second.FallbackPrompt, "full recovery transcript") {
+		t.Fatalf("fallback prompt = %q", second.FallbackPrompt)
+	}
+}
+
 func TestWorkerRenewsLeaseThroughArtifactUpload(t *testing.T) {
 	ctx := context.Background()
 	service := controlplane.New(30 * time.Millisecond)

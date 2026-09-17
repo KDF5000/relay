@@ -241,6 +241,20 @@ func (s *Store) Claim(ctx context.Context, nodeID string, leaseTTL time.Duration
 		if !nodeMatches(node, request) {
 			continue
 		}
+		runtimeSessionID := ""
+		if request.SessionID != "" {
+			var runtimeSessionNode string
+			err := tx.QueryRow(ctx, `
+				SELECT native_session_id,node_id FROM relay_runtime_sessions
+				WHERE tenant_id=$1 AND project_id=$2 AND session_id=$3 AND agent_id=$4 AND runtime_id=$5 AND provider=$6`,
+				request.TenantID, request.ProjectID, request.SessionID, request.AgentID, request.Runtime.ID, request.Runtime.Provider).Scan(&runtimeSessionID, &runtimeSessionNode)
+			if err == nil && runtimeSessionNode != nodeID {
+				runtimeSessionID = ""
+			}
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return controlplane.Assignment{}, err
+			}
+		}
 		now := time.Now().UTC()
 		if attemptStatus == string(relay.AttemptLeased) && previousExpiry != nil && !now.Before(*previousExpiry) {
 			if err := appendEvent(ctx, tx, runID, attemptID, "attempt.lease_expired", map[string]string{"node_id": previousNode}); err != nil {
@@ -259,7 +273,7 @@ func (s *Store) Claim(ctx context.Context, nodeID string, leaseTTL time.Duration
 		if err := tx.Commit(ctx); err != nil {
 			return controlplane.Assignment{}, err
 		}
-		return controlplane.Assignment{RunID: runID, AttemptID: attemptID, LeaseToken: lease, LeaseExpiresAt: expires, Request: request}, nil
+		return controlplane.Assignment{RunID: runID, AttemptID: attemptID, LeaseToken: lease, LeaseExpiresAt: expires, Request: request, RuntimeSessionID: runtimeSessionID}, nil
 	}
 	return controlplane.Assignment{}, controlplane.ErrNoAssignment
 }
@@ -539,6 +553,16 @@ func (s *Store) Complete(ctx context.Context, assignment controlplane.Assignment
 		}
 		if _, err := tx.Exec(ctx, `UPDATE relay_attempts SET status = $1, completed_at = $2 WHERE id = $3`, relay.AttemptSucceeded, now, run.Attempt.ID); err != nil {
 			return err
+		}
+		if run.SessionID != "" && result.RuntimeSessionID != "" {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO relay_runtime_sessions(tenant_id,project_id,session_id,agent_id,runtime_id,provider,native_session_id,node_id,updated_at)
+				VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+				ON CONFLICT (tenant_id,project_id,session_id,agent_id,runtime_id,provider) DO UPDATE SET
+					native_session_id=EXCLUDED.native_session_id,node_id=EXCLUDED.node_id,updated_at=EXCLUDED.updated_at`,
+				run.TenantID, run.ProjectID, run.SessionID, run.AgentID, run.Runtime.ID, run.Runtime.Provider, result.RuntimeSessionID, run.Attempt.NodeID, now); err != nil {
+				return err
+			}
 		}
 		if err := appendEvent(ctx, tx, run.ID, run.Attempt.ID, "attempt.succeeded", nil); err != nil {
 			return err

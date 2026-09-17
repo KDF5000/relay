@@ -130,18 +130,28 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 		return relay.Result{}, fmt.Errorf("relay %s: start tool bridge: %w", fork.Name, err)
 	}
 	defer bridge.Close()
-	args := []string{"exec", "--json", "--color", "never", "--sandbox", sandbox, "--cd", workDir, "--output-last-message", finalPath}
+	resuming := execution.RuntimeSessionID != "" && !config.Ephemeral
+	var args []string
+	if resuming {
+		args = []string{"exec", "resume", "--json", "--output-last-message", finalPath}
+	} else {
+		args = []string{"exec", "--json", "--color", "never", "--sandbox", sandbox, "--cd", workDir, "--output-last-message", finalPath}
+		if config.Ephemeral {
+			args = append(args, "--ephemeral")
+		}
+	}
 	if !config.RequireGitRepository {
 		args = append(args, "--skip-git-repo-check")
-	}
-	if config.Ephemeral {
-		args = append(args, "--ephemeral")
 	}
 	if config.Model != "" {
 		args = append(args, "--model", config.Model)
 	}
 	if config.Profile != "" {
-		args = append(args, "--profile", config.Profile)
+		if resuming {
+			args = append([]string{"--profile", config.Profile}, args...)
+		} else {
+			args = append(args, "--profile", config.Profile)
+		}
 	}
 	if config.ReasoningEffort != "" {
 		args = append(args, "--config", "model_reasoning_effort="+tomlString(config.ReasoningEffort))
@@ -171,7 +181,11 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 	for _, imagePath := range imagePaths {
 		args = append(args, "--image", imagePath)
 	}
-	args = append(args, "-")
+	if resuming {
+		args = append(args, execution.RuntimeSessionID, "-")
+	} else {
+		args = append(args, "-")
+	}
 
 	command := exec.CommandContext(ctx, binary, args...)
 	runtimeprocess.Configure(command)
@@ -227,6 +241,15 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 		return relay.Result{}, fmt.Errorf("relay %s: read JSONL: %w", fork.Name, scanErr)
 	}
 	if waitErr != nil {
+		if resuming && execution.FallbackPrompt != "" && ctx.Err() == nil && resumeUnavailable(stderr.String()) {
+			if execution.Emit != nil {
+				execution.Emit(ctx, "runtime."+fork.Name+".thread.resume_failed", map[string]string{"thread_id": execution.RuntimeSessionID, "error": waitErr.Error()})
+			}
+			recovery := execution
+			recovery.RuntimeSessionID = ""
+			recovery.Instructions.Prompt = execution.FallbackPrompt
+			return ExecuteFork(ctx, config, recovery, fork)
+		}
 		return relay.Result{}, fmt.Errorf("relay %s: process failed: %w: %s", fork.Name, waitErr, truncate(stderr.String(), 8192))
 	}
 	message, err := os.ReadFile(finalPath)
@@ -251,7 +274,21 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 		return relay.Result{}, fmt.Errorf("relay %s: collect artifacts: %w", fork.Name, err)
 	}
 	artifacts = append(artifacts, declared...)
-	return relay.Result{Summary: finalMessage, Output: output, Artifacts: artifacts}, nil
+	result := relay.Result{Summary: finalMessage, Output: output, Artifacts: artifacts}
+	if !config.Ephemeral {
+		result.RuntimeSessionID = threadID
+	}
+	return result, nil
+}
+
+func resumeUnavailable(stderr string) bool {
+	value := strings.ToLower(stderr)
+	for _, fragment := range []string{"no rollout found", "thread not found", "session not found", "no saved session", "unknown session", "failed to load thread"} {
+		if strings.Contains(value, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func runtimeEnv(config Config, bridgeDir, toolToken string, forkEnv []string) []string {

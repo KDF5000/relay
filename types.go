@@ -87,10 +87,11 @@ type Source struct {
 }
 
 type Input struct {
-	Type    string          `json:"type"`
-	Version string          `json:"version"`
-	Prompt  string          `json:"prompt"`
-	Data    json.RawMessage `json:"data,omitempty"`
+	Type               string          `json:"type"`
+	Version            string          `json:"version"`
+	Prompt             string          `json:"prompt"`
+	ContinuationPrompt string          `json:"continuation_prompt,omitempty"`
+	Data               json.RawMessage `json:"data,omitempty"`
 }
 
 type InstructionFragment struct {
@@ -161,9 +162,10 @@ type CapabilityResult struct {
 }
 
 type Result struct {
-	Summary   string          `json:"summary"`
-	Output    json.RawMessage `json:"output,omitempty"`
-	Artifacts []Artifact      `json:"artifacts,omitempty"`
+	Summary          string          `json:"summary"`
+	Output           json.RawMessage `json:"output,omitempty"`
+	Artifacts        []Artifact      `json:"artifacts,omitempty"`
+	RuntimeSessionID string          `json:"runtime_session_id,omitempty"`
 }
 
 type Artifact struct {
@@ -233,7 +235,13 @@ type Execution struct {
 	Capabilities CapabilityInvoker
 	Emit         func(context.Context, string, any)
 	WorkDir      string
-	Interactions InteractionBroker
+	// RuntimeSessionID is the provider-native conversation/thread identity
+	// previously committed for this Relay Session on the selected Runtime.
+	RuntimeSessionID string
+	// FallbackPrompt contains the full recovery context used when a native
+	// Runtime session cannot be resumed.
+	FallbackPrompt string
+	Interactions   InteractionBroker
 }
 
 type InteractionKind string

@@ -396,8 +396,12 @@ Relay 已实现真实 Codex Runtime Adapter，使用 OpenAI 官方稳定的 `cod
 实现遵循 [OpenAI Codex Developer Commands](https://developers.openai.com/codex/cli/reference)
 中 `codex exec` 的非交互、JSONL 和最终消息文件契约。
 
-当前也已支持 `app-server` 协议的增量输出和模型发现。每次执行仍启动新线程，尚未提供
-原生 Session Resume；通用 Interaction 接口存在并不意味着每个 Runtime 已接通原生审批。
+当前也已支持 `app-server` 协议的增量输出、模型发现和原生 Session Resume。非 ephemeral
+执行成功后，Control Plane 会按 tenant、project、session、Agent、Runtime 和 Node 记录
+Runtime Thread ID；同一会话的下一轮只提交当前消息，由 Runtime 保留并压缩自己的上下文。
+Thread 丢失、无法恢复或任务迁移到其他 Node 时，Node 使用 Host 随请求提供的有界恢复
+Prompt 新建线程，成功后用新的 Thread ID 原子替换旧映射。通用 Interaction 接口存在并不
+意味着每个 Runtime 已接通原生审批。
 
 Codex-like Runtime 可以在结束前写入 `.relay/artifacts.json`，声明需要独立上传的业务交付
 文件。每项包含相对工作目录的 `path`、语义化 `type`，以及可选的 `name` 和

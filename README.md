@@ -344,6 +344,7 @@ Long-running runtimes can create approval or input interactions, pause, and resu
   and `relayctl --version` print both. A Node registration with a different protocol version is rejected
   with HTTP `426 Upgrade Required`; product-version differences are diagnostic and do not affect scheduling.
 - Codex and Trae use `"protocol": "app-server"` for incremental `assistant.message.delta` events and runtime model discovery.
+- Non-ephemeral Codex and Trae runs persist the provider-native thread for the same tenant, project, session, Agent, Runtime, and Node. Later Runs send only the new turn through native resume, preserving the Runtime's own context compaction. If the thread cannot be resumed or execution moves to another Node, Relay starts a replacement thread with the Host-provided recovery prompt.
 - App-server execution succeeds only after the runtime reports `turn/completed`; partial output is retained as events when the protocol ends early, but the Run fails.
 - The legacy `exec` protocol remains available for compatible non-interactive CLIs but only produces complete messages.
 - Trae exec mode cannot use `permission_mode=default`, because a headless process cannot ask for approval. Omit it for the headless default, or use `bypass_permissions` or a headless-compatible `custom` policy.
