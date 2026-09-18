@@ -90,7 +90,14 @@ run_installer() {
 
 run_installer Linux
 linux_unit="$test_root/home-Linux/.config/systemd/user/relay-node.service"
+linux_config="$test_root/home-Linux/.config/relay/node.json"
 test -f "$linux_unit"
+grep -F '"provider": "codex"' "$linux_config" >/dev/null
+grep -F '"ephemeral": false' "$linux_config" >/dev/null
+if grep -F '"ephemeral": true' "$linux_config" >/dev/null; then
+  printf 'installer unexpectedly enabled ephemeral runtime sessions\n' >&2
+  exit 1
+fi
 test "$(stat -c '%a' "$linux_unit" 2>/dev/null || stat -f '%Lp' "$linux_unit")" = 600
 grep -F 'ExecStart=' "$linux_unit" >/dev/null
 grep -F 'daemon-reload' "$test_root/Linux-service.log" >/dev/null

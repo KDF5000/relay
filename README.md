@@ -77,7 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/KDF5000/relay/main/install.sh \
     sh -s -- --server https://relay.example.com --install-service
 ```
 
-The installer supports macOS and Linux on AMD64 and ARM64. It verifies the release checksum, installs `relay-node`, `relay-tool`, and `relayctl` under `~/.local/bin`, discovers supported runtime CLIs from `PATH`, and writes the Node configuration to `~/.config/relay/node.json`.
+The installer supports macOS and Linux on AMD64 and ARM64. It verifies the release checksum, installs `relay-node`, `relay-tool`, and `relayctl` under `~/.local/bin`, discovers supported runtime CLIs from `PATH`, and writes the Node configuration to `~/.config/relay/node.json`. Discovered Codex and Trae runtimes default to non-ephemeral execution so Relay can preserve their native conversation threads across Runs.
 
 `--install-service` installs and starts a user-level system service:
 
