@@ -56,7 +56,9 @@ Artifact 链路。执行探针可能消耗 Runtime Provider 用量。
   取消 Runtime，并阻止成功完成；错误上报
   失败也返回给调用方。若控制平面不可达，最终状态可能需要等待 Lease 过期后的协调。
 - relay-node 默认启用磁盘 outbox。事件经文件同步、原子发布和目录同步后才上报，
-  确认后删除。默认总容量 64 MiB，单事件 1 MiB，超限会终止当前执行并报告错误。
+  确认后删除。默认总容量 64 MiB，单事件 1 MiB。超限的 Runtime 原始事件会被替换为
+  包含 `truncated`、`original_bytes` 和有界 `preview` 的诊断事件，不会中断 Runtime；完整最终输出仍通过
+  Run Result 和 Runtime 声明的 Artifact 传递。
   文件权限 0600、目录 0700，目录有进程锁；仅保存事件与 Lease，不保存业务 Request。
 - 启动时先补传遗留事件，再领取新任务。服务端原子校验 Lease；有效时去重补传并将旧
   Attempt 标记为 Node 重启中断；失效或已终结时清理并记录原因。网络结果未知时保留

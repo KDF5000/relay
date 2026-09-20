@@ -72,12 +72,9 @@ func (o *Outbox) syncDir() error {
 func (o *Outbox) save(a controlplane.Assignment, id, kind string, data any) (string, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	payload, err := json.Marshal(data)
+	payload, err := marshalEventData(data)
 	if err != nil {
 		return "", err
-	}
-	if len(payload) > 1<<20 {
-		return "", errors.New("event payload exceeds 1 MiB")
 	}
 	// Do not persist the business prompt or full Request alongside lease secrets.
 	a.Request = controlplane.Assignment{}.Request

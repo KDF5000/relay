@@ -183,6 +183,40 @@ func TestOutboxBoundsAndRecoveryFailures(t *testing.T) {
 	}
 }
 
+func TestOutboxPersistsOversizedEventAsBoundedPreview(t *testing.T) {
+	_, a := assigned(t)
+	o, err := OpenOutbox(t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+
+	path, err := o.save(a, "1", "runtime.trae.item.completed", map[string]string{
+		"output": strings.Repeat("x", maxEventPayloadBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record pendingEvent
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Data) > maxEventPayloadBytes {
+		t.Fatalf("persisted payload size = %d", len(record.Data))
+	}
+	var data truncatedEventData
+	if err := json.Unmarshal(record.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.Truncated || data.OriginalBytes <= maxEventPayloadBytes {
+		t.Fatalf("truncated=%v original_bytes=%d", data.Truncated, data.OriginalBytes)
+	}
+}
+
 func TestOutboxExpiredLeaseDoesNotReplay(t *testing.T) {
 	ctx := context.Background()
 	cp := controlplane.New(20 * time.Millisecond)

@@ -2,6 +2,7 @@ package node_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -323,6 +324,51 @@ func TestEventDeliveryFailureCannotCompleteRun(t *testing.T) {
 	}
 	if persisted.Status != relay.RunFailed {
 		t.Fatalf("status = %s, want failed", persisted.Status)
+	}
+}
+
+func TestOversizedRuntimeEventDoesNotFailRun(t *testing.T) {
+	ctx := context.Background()
+	service := controlplane.New(time.Second)
+	worker := &node.Worker{
+		Registration: controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "large-event-node", Runtimes: []controlplane.Runtime{{Provider: "test"}}, Capacity: 1},
+		ControlPlane: service,
+		Executors: node.ExecutorMap{"test": relay.ExecutorFunc(func(ctx context.Context, execution relay.Execution) (relay.Result, error) {
+			execution.Emit(ctx, "runtime.trae.item.completed", map[string]string{"output": strings.Repeat("x", 1<<20)})
+			return relay.Result{Summary: "completed after large tool output"}, nil
+		})},
+	}
+	if _, err := worker.Register(ctx); err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Submit(ctx, relay.Request{AgentID: "agent", IdempotencyKey: "large-event", Runtime: relay.RuntimeRequirement{Provider: "test"}, Input: relay.Input{Prompt: "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := worker.RunOnce(ctx)
+	if err != nil || completed.Status != relay.RunSucceeded {
+		t.Fatalf("completed=%+v err=%v", completed, err)
+	}
+	events, err := service.Events(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type != "runtime.trae.item.completed" {
+			continue
+		}
+		encoded, err := json.Marshal(event.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(encoded) > 1<<20 || !strings.Contains(string(encoded), `"truncated":true`) {
+			t.Fatalf("event data was not bounded: %s", encoded)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("large runtime event was not retained as a preview")
 	}
 }
 
