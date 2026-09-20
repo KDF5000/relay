@@ -16,6 +16,8 @@ func TestExecutorUsesTraeExecContract(t *testing.T) {
 	fake := filepath.Join(dir, "traex")
 	script := `#!/bin/sh
 out=""
+all_args=" $* "
+case "$all_args" in *" --sandbox "*|*" --permission-mode "*) exit 14;; esac
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--output-last-message" ]; then out="$2"; shift 2; continue; fi
   shift
@@ -34,7 +36,7 @@ printf '%s' 'TRAE_RUNTIME_OK' > "$out"
 	t.Setenv("TRAE_HOME", filepath.Join(dir, "trae-home"))
 	t.Setenv("MULTICA_TOKEN", "secret")
 	var events []string
-	executor := runtimetrae.Executor{Config: runtimetrae.Config{Binary: fake, WorkRoot: dir, Ephemeral: true, PermissionMode: "default"}}
+	executor := runtimetrae.Executor{Config: runtimetrae.Config{Binary: fake, WorkRoot: dir, Ephemeral: true}}
 	result, err := executor.Execute(context.Background(), relay.Execution{RunID: "run-trae", Instructions: relay.CompiledInstructions{Stable: "rules", Prompt: "work"}, Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{}), Emit: func(_ context.Context, event string, _ any) { events = append(events, event) }})
 	if err != nil {
 		t.Fatal(err)
@@ -63,13 +65,5 @@ func TestProbeVersionNormalizesInternalEdition(t *testing.T) {
 	version, err := runtimetrae.ProbeVersion(context.Background(), fake)
 	if err != nil || version != "0.202.3" {
 		t.Fatalf("version=%q err=%v", version, err)
-	}
-}
-
-func TestExecutorRejectsInteractivePermissionModes(t *testing.T) {
-	executor := runtimetrae.Executor{Config: runtimetrae.Config{PermissionMode: "auto"}}
-	_, err := executor.Execute(context.Background(), relay.Execution{})
-	if err == nil || !strings.Contains(err.Error(), "headless permission mode") {
-		t.Fatalf("error=%v", err)
 	}
 }

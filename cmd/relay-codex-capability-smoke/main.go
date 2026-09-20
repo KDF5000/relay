@@ -62,7 +62,7 @@ func main() {
 		ControlPlane: transport,
 		Bindings:     registry,
 		Executors: node.ExecutorMap{"codex": runtimecodex.Executor{Config: runtimecodex.Config{
-			Binary: "codex", ToolDir: toolDir, Sandbox: "workspace-write", WorkRoot: workRoot, Ephemeral: true,
+			Binary: "codex", ToolDir: toolDir, WorkRoot: workRoot, Ephemeral: true,
 		}}},
 	}
 	if _, err := worker.Register(ctx); err != nil {

@@ -16,14 +16,6 @@ type Executor struct{ Config Config }
 
 func (e Executor) Execute(ctx context.Context, execution relay.Execution) (relay.Result, error) {
 	config := e.Config
-	// Trae's interactive "default" mode may ask for approval, which is
-	// impossible under `exec`. Omitting it selects Trae's headless default.
-	if config.PermissionMode == "default" {
-		config.PermissionMode = ""
-	}
-	if config.PermissionMode != "" && config.PermissionMode != "bypass_permissions" && config.PermissionMode != "custom" {
-		return relay.Result{}, fmt.Errorf("relay trae: unsupported headless permission mode %q", config.PermissionMode)
-	}
 	if config.Binary == "" {
 		config.Binary = ResolveBinary("")
 	}

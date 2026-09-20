@@ -20,28 +20,25 @@ import (
 )
 
 type Config struct {
-	Binary                string
-	Protocol              string
-	ToolDir               string
-	PassEnv               []string
-	Env                   map[string]string
-	Model                 string
-	Profile               string
-	ReasoningEffort       string
-	ServiceTier           string
-	Sandbox               string
-	AllowDangerousSandbox bool
-	WorkRoot              string
-	WorkDir               string
-	Ephemeral             bool
-	RequireGitRepository  bool
-	PermissionMode        string
-	AllowedTools          []string
-	DisallowedTools       []string
-	ShellToolTimeout      string
-	IgnoreUserConfig      bool
-	IgnoreRules           bool
-	ExtraArgs             []string
+	Binary               string
+	Protocol             string
+	ToolDir              string
+	PassEnv              []string
+	Env                  map[string]string
+	Model                string
+	Profile              string
+	ReasoningEffort      string
+	ServiceTier          string
+	WorkRoot             string
+	WorkDir              string
+	Ephemeral            bool
+	RequireGitRepository bool
+	AllowedTools         []string
+	DisallowedTools      []string
+	ShellToolTimeout     string
+	IgnoreUserConfig     bool
+	IgnoreRules          bool
+	ExtraArgs            []string
 }
 
 type Executor struct{ Config Config }
@@ -82,16 +79,6 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 	binary := config.Binary
 	if binary == "" {
 		binary = fork.DefaultBinary
-	}
-	sandbox := config.Sandbox
-	if sandbox == "" {
-		sandbox = "workspace-write"
-	}
-	if sandbox != "read-only" && sandbox != "workspace-write" && sandbox != "danger-full-access" {
-		return relay.Result{}, fmt.Errorf("relay %s: unsupported sandbox %q", fork.Name, sandbox)
-	}
-	if sandbox == "danger-full-access" && !config.AllowDangerousSandbox {
-		return relay.Result{}, fmt.Errorf("relay %s: danger-full-access requires explicit AllowDangerousSandbox", fork.Name)
 	}
 	workDir := execution.WorkDir
 	if workDir == "" {
@@ -135,7 +122,7 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 	if resuming {
 		args = []string{"exec", "resume", "--json", "--output-last-message", finalPath}
 	} else {
-		args = []string{"exec", "--json", "--color", "never", "--sandbox", sandbox, "--cd", workDir, "--output-last-message", finalPath}
+		args = []string{"exec", "--json", "--color", "never", "--cd", workDir, "--output-last-message", finalPath}
 		if config.Ephemeral {
 			args = append(args, "--ephemeral")
 		}
@@ -158,9 +145,6 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 	}
 	if config.ServiceTier != "" {
 		args = append(args, "--config", "service_tier="+tomlString(config.ServiceTier))
-	}
-	if config.PermissionMode != "" {
-		args = append(args, "--permission-mode", config.PermissionMode)
 	}
 	for _, tool := range config.AllowedTools {
 		args = append(args, "--allowed-tool", tool)
@@ -199,7 +183,7 @@ func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, 
 	var stderr bytes.Buffer
 	command.Stderr = &limitedBuffer{buffer: &stderr, remaining: 4 << 20}
 	if execution.Emit != nil {
-		execution.Emit(ctx, "runtime."+fork.Name+".started", map[string]any{"binary": binary, "work_dir": workDir, "sandbox": sandbox})
+		execution.Emit(ctx, "runtime."+fork.Name+".started", map[string]any{"binary": binary, "work_dir": workDir})
 	}
 	if err := command.Start(); err != nil {
 		return relay.Result{}, fmt.Errorf("relay %s: start: %w", fork.Name, err)

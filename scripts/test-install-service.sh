@@ -94,6 +94,10 @@ linux_config="$test_root/home-Linux/.config/relay/node.json"
 test -f "$linux_unit"
 grep -F '"provider": "codex"' "$linux_config" >/dev/null
 grep -F '"ephemeral": false' "$linux_config" >/dev/null
+if grep -F '"sandbox"' "$linux_config" >/dev/null; then
+  printf 'installer unexpectedly generated a sandbox setting\n' >&2
+  exit 1
+fi
 if grep -F '"ephemeral": true' "$linux_config" >/dev/null; then
   printf 'installer unexpectedly enabled ephemeral runtime sessions\n' >&2
   exit 1

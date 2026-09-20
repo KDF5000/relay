@@ -347,7 +347,7 @@ Long-running runtimes can create approval or input interactions, pause, and resu
 - Non-ephemeral Codex and Trae runs persist the provider-native thread for the same tenant, project, session, Agent, Runtime, and Node. Later Runs send only the new turn through native resume, preserving the Runtime's own context compaction. If the thread cannot be resumed or execution moves to another Node, Relay starts a replacement thread with the Host-provided recovery prompt.
 - App-server execution succeeds only after the runtime reports `turn/completed`; partial output is retained as events when the protocol ends early, but the Run fails.
 - The legacy `exec` protocol remains available for compatible non-interactive CLIs but only produces complete messages.
-- Trae exec mode cannot use `permission_mode=default`, because a headless process cannot ask for approval. Omit it for the headless default, or use `bypass_permissions` or a headless-compatible `custom` policy.
+- Relay does not override runtime permission policy. Legacy Node `sandbox` and `permission_mode` fields are ignored; configure permissions in Codex or Trae itself.
 - Runtime subprocesses receive a restricted environment by default. Add variables explicitly through `pass_env` or `env` in the Node configuration.
 - Codex-like runtimes can declare durable output files by writing `.relay/artifacts.json` in the work directory before they finish. Each entry contains a relative `path`, a semantic `type`, and optional `name` and `content_type`, for example `{"artifacts":[{"path":"report.md","type":"report","content_type":"text/markdown"}]}`. Relay validates that declared files stay inside the workspace and uploads them separately from the runtime's final message.
 

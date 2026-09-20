@@ -53,10 +53,8 @@ type runtimeConfig struct {
 	Profile          string                      `json:"profile,omitempty"`
 	ReasoningEffort  string                      `json:"reasoning_effort,omitempty"`
 	ServiceTier      string                      `json:"service_tier,omitempty"`
-	Sandbox          string                      `json:"sandbox,omitempty"`
 	WorkRoot         string                      `json:"work_root,omitempty"`
 	Ephemeral        bool                        `json:"ephemeral,omitempty"`
-	PermissionMode   string                      `json:"permission_mode,omitempty"`
 	AllowedTools     []string                    `json:"allowed_tools,omitempty"`
 	DisallowedTools  []string                    `json:"disallowed_tools,omitempty"`
 	ShellToolTimeout string                      `json:"shell_tool_timeout,omitempty"`
@@ -327,5 +325,5 @@ func isTrae(item runtimeConfig) bool {
 	return item.Kind == "trae" || item.Kind == "traex" || item.Kind == "trae-cli" || (item.Kind == "" && (item.Provider == "trae" || item.Provider == "traex"))
 }
 func compatibleConfig(item runtimeConfig) runtimecodex.Config {
-	return runtimecodex.Config{Binary: item.Command, Protocol: item.Protocol, ToolDir: item.ToolDir, PassEnv: item.PassEnv, Env: item.Env, Model: item.Model, Profile: item.Profile, ReasoningEffort: item.ReasoningEffort, ServiceTier: item.ServiceTier, Sandbox: item.Sandbox, WorkRoot: item.WorkRoot, Ephemeral: item.Ephemeral, PermissionMode: item.PermissionMode, AllowedTools: item.AllowedTools, DisallowedTools: item.DisallowedTools, ShellToolTimeout: item.ShellToolTimeout, IgnoreUserConfig: item.IgnoreUserConfig, IgnoreRules: item.IgnoreRules, ExtraArgs: item.Args}
+	return runtimecodex.Config{Binary: item.Command, Protocol: item.Protocol, ToolDir: item.ToolDir, PassEnv: item.PassEnv, Env: item.Env, Model: item.Model, Profile: item.Profile, ReasoningEffort: item.ReasoningEffort, ServiceTier: item.ServiceTier, WorkRoot: item.WorkRoot, Ephemeral: item.Ephemeral, AllowedTools: item.AllowedTools, DisallowedTools: item.DisallowedTools, ShellToolTimeout: item.ShellToolTimeout, IgnoreUserConfig: item.IgnoreUserConfig, IgnoreRules: item.IgnoreRules, ExtraArgs: item.Args}
 }

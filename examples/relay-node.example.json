@@ -19,7 +19,6 @@
       "protocol": "app-server",
       "command": "codex",
       "tool_dir": "./bin",
-      "sandbox": "workspace-write",
       "work_root": "/tmp/relay-runs",
       "ephemeral": true
     },
@@ -30,7 +29,6 @@
       "protocol": "app-server",
       "command": "traex",
       "tool_dir": "./bin",
-      "sandbox": "workspace-write",
       "work_root": "/tmp/relay-runs",
       "ephemeral": true
     }

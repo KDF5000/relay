@@ -308,13 +308,13 @@ else
   if [ "$include_codex" -eq 1 ]; then
     escaped_command=$(json_escape "$codex_command")
     runtime_json="${runtime_json}${separator}
-    {\"id\": \"${escaped_node}/codex\", \"kind\": \"codex\", \"provider\": \"codex\", \"protocol\": \"app-server\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"sandbox\": \"workspace-write\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+    {\"id\": \"${escaped_node}/codex\", \"kind\": \"codex\", \"provider\": \"codex\", \"protocol\": \"app-server\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
     separator=","
   fi
   if [ "$include_trae" -eq 1 ]; then
     escaped_command=$(json_escape "$trae_command")
     runtime_json="${runtime_json}${separator}
-    {\"id\": \"${escaped_node}/trae\", \"kind\": \"trae\", \"provider\": \"trae\", \"protocol\": \"app-server\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"sandbox\": \"workspace-write\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+    {\"id\": \"${escaped_node}/trae\", \"kind\": \"trae\", \"provider\": \"trae\", \"protocol\": \"app-server\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
   fi
 
   token_line=""

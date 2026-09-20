@@ -34,7 +34,7 @@ func main() {
 	defer server.Close()
 	transport := httpapi.NewClient(server.URL)
 	host := sdk.New(transport)
-	worker := &node.Worker{Registration: controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "local-codex-smoke", Runtimes: []controlplane.Runtime{{Provider: "codex", Version: version}}, Capacity: 1}, ControlPlane: transport, Bindings: binding.NewRegistry(), Executors: node.ExecutorMap{"codex": runtimecodex.Executor{Config: runtimecodex.Config{Binary: "codex", Sandbox: "read-only", WorkRoot: workRoot, Ephemeral: true}}}}
+	worker := &node.Worker{Registration: controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "local-codex-smoke", Runtimes: []controlplane.Runtime{{Provider: "codex", Version: version}}, Capacity: 1}, ControlPlane: transport, Bindings: binding.NewRegistry(), Executors: node.ExecutorMap{"codex": runtimecodex.Executor{Config: runtimecodex.Config{Binary: "codex", WorkRoot: workRoot, Ephemeral: true}}}}
 	if _, err := worker.Register(ctx); err != nil {
 		log.Fatal(err)
 	}

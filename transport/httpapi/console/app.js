@@ -1593,7 +1593,7 @@ function updateRegistrationPreview() {
   const config = {
     server: location.origin,
     node: { id: $("#register-node-id").value.trim() || "developer-node", capacity: Number($("#register-capacity").value) || 1, runtimes: [] },
-    runtimes: [{ id: `${$("#register-node-id").value.trim() || "developer-node"}/${provider}`, kind: provider, provider, protocol: "app-server", command, ...(defaultModel ? { model: defaultModel } : {}), ...(models.length ? { models } : {}), sandbox: "workspace-write", work_root: "/tmp/relay-runs", ephemeral: true }],
+    runtimes: [{ id: `${$("#register-node-id").value.trim() || "developer-node"}/${provider}`, kind: provider, provider, protocol: "app-server", command, ...(defaultModel ? { model: defaultModel } : {}), ...(models.length ? { models } : {}), work_root: "/tmp/relay-runs", ephemeral: true }],
   };
   $("#runtime-config-preview").textContent = JSON.stringify(config, null, 2);
 }

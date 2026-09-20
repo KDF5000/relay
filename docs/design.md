@@ -385,13 +385,12 @@ Relay 已实现真实 Codex Runtime Adapter，使用 OpenAI 官方稳定的 `cod
 - 使用 `--json` 接收 JSONL 事件并转为 Relay Event；
 - 使用 `--output-last-message` 获取最终回答；
 - 提取 Codex Thread ID；
-- 使用 `--sandbox read-only` 或 `workspace-write`；
+- 不覆盖 Runtime 自身的 sandbox 或 approval 配置；
 - Model、Profile、Reasoning Effort 和 Service Tier 配置；
 - `--ephemeral` 执行；
 - 生成 `AGENTS.md`；
 - 向 Codex 进程注入当前 Run 的 Tool Bridge；
 - Context 取消后终止 Codex 进程；
-- 默认拒绝 `danger-full-access`，只有显式配置才允许。
 
 实现遵循 [OpenAI Codex Developer Commands](https://developers.openai.com/codex/cli/reference)
 中 `codex exec` 的非交互、JSONL 和最终消息文件契约。
@@ -412,7 +411,7 @@ Codex-like Runtime 可以在结束前写入 `.relay/artifacts.json`，声明需�
 ### 10.2 TraeCode
 
 TraeCode CLI fork 自 Codex，并保留 `exec`、stdin Prompt、JSONL Event、最终消息文件、
-sandbox、model/profile 和 ephemeral 等核心契约。Relay 复用 Codex-like 执行内核，但对外
+model/profile 和 ephemeral 等核心契约。Relay 复用 Codex-like 执行内核，但对外
 保持独立边界：
 
 - Runtime Provider 使用 `trae`；
@@ -420,7 +419,7 @@ sandbox、model/profile 和 ephemeral 等核心契约。Relay 复用 Codex-like 
 - 版本输出统一提取为语义版本，例如 `0.202.3`；
 - Event 使用 `runtime.trae.*`，最终回答 Artifact 使用 `trae_final_message`；
 - 只额外透传显式允许的 `TRAE_HOME`、`TRAE_API_KEY`、`TRAE_BASE_URL`；
-- 支持 headless-safe 的 `permission_mode`、allowed/disallowed tools、shell timeout、ignore config/rules；
+- 权限策略由 Trae 自身配置，Relay 不再附加 `permission_mode`；
 - 继续使用 Relay 的进程组监管、Workspace、文件 Tool Bridge 和 Artifact 上传链路。
 
 Node 配置的 `kind` 可使用 `trae`、`traex` 或 `trae-cli`，建议稳定的业务 Provider 固定为

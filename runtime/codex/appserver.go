@@ -35,16 +35,6 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	if binary == "" {
 		binary = fork.DefaultBinary
 	}
-	sandbox := config.Sandbox
-	if sandbox == "" {
-		sandbox = "workspace-write"
-	}
-	if sandbox != "read-only" && sandbox != "workspace-write" && sandbox != "danger-full-access" {
-		return relay.Result{}, fmt.Errorf("relay %s: unsupported sandbox %q", fork.Name, sandbox)
-	}
-	if sandbox == "danger-full-access" && !config.AllowDangerousSandbox {
-		return relay.Result{}, fmt.Errorf("relay %s: danger-full-access requires explicit AllowDangerousSandbox", fork.Name)
-	}
 	workDir := execution.WorkDir
 	if workDir == "" {
 		workDir = config.WorkDir
@@ -99,7 +89,7 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	var stderr bytes.Buffer
 	command.Stderr = &limitedBuffer{buffer: &stderr, remaining: 4 << 20}
 	if execution.Emit != nil {
-		execution.Emit(ctx, "runtime."+fork.Name+".started", map[string]any{"binary": binary, "protocol": "app-server", "work_dir": workDir, "sandbox": sandbox})
+		execution.Emit(ctx, "runtime."+fork.Name+".started", map[string]any{"binary": binary, "protocol": "app-server", "work_dir": workDir})
 	}
 	if err := command.Start(); err != nil {
 		return relay.Result{}, fmt.Errorf("relay %s: start app-server: %w", fork.Name, err)
@@ -126,7 +116,7 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	if err := writeRequest(map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
 		return relay.Result{}, err
 	}
-	threadParams := map[string]any{"cwd": workDir, "sandbox": sandbox, "approvalPolicy": "never"}
+	threadParams := map[string]any{"cwd": workDir}
 	if config.Model != "" {
 		threadParams["model"] = config.Model
 	}

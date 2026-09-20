@@ -25,6 +25,8 @@ func TestExecutorUsesCodexExecJSONLAndFinalMessage(t *testing.T) {
 	script := `#!/bin/sh
 out=""
 model=""
+all_args=" $* "
+case "$all_args" in *" --sandbox "*|*" --permission-mode "*) exit 15;; esac
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--output-last-message" ]; then out="$2"; shift 2; continue; fi
   if [ "$1" = "--model" ]; then model="$2"; shift 2; continue; fi
@@ -176,14 +178,6 @@ printf '%s' 'recovered' > "$out"
 	}
 }
 
-func TestDangerousSandboxRequiresExplicitOptIn(t *testing.T) {
-	executor := runtimecodex.Executor{Config: runtimecodex.Config{Sandbox: "danger-full-access"}}
-	_, err := executor.Execute(context.Background(), relay.Execution{})
-	if err == nil || !strings.Contains(err.Error(), "explicit") {
-		t.Fatalf("expected safety error, got %v", err)
-	}
-}
-
 func TestProbeModelsReadsAppServerCatalog(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "codex")
@@ -216,6 +210,7 @@ read -r initialize
 printf '%s\n' '{"id":1,"result":{"userAgent":"fake"}}'
 read -r initialized
 read -r thread_start
+case "$thread_start" in *'"sandbox"'*|*'"approvalPolicy"'*) exit 9;; esac
 printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-stream"}}}'
 read -r turn_start
 printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1"}}}'
