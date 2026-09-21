@@ -1,6 +1,6 @@
 # Read-only workspace inspection
 
-Host API: `GET /v1/runs/{runID}/workspace?operation=list|read|diff&path=...`.
+Host API: `GET /v1/runs/{runID}/workspace?operation=list|read|diff|git-status&path=...`.
 The Server authorizes access to the run and routes the request to its latest
 attempt's Node. Nodes poll for inspection requests with their existing Node
 credentials; no inbound Node listener or SSH access is required.
@@ -11,6 +11,9 @@ files larger than 1 MiB are rejected. Directory listings are limited to 1,000
 entries and hide `.git` and symlinks. `diff` returns the current tracked Git
 changes relative to HEAD, limited to 2 MiB, with external diff helpers disabled.
 It is not a per-run patch and may include changes made before the run.
+`git-status` returns the current branch and short commit for Git workspaces, or
+`repository: false` for ordinary directories. Detached HEAD workspaces return the
+short commit with `detached: true`.
 
 The Node persists its run-to-prepared-directory mapping under the configured
 workspace root. Deleted or ephemeral workspaces cannot be inspected. Runs made

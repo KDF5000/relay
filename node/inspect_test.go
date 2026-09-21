@@ -62,6 +62,10 @@ func TestWorkspaceInspectionHTTPChain(t *testing.T) {
 	if err != nil || !strings.Contains(diff.Content, "+after") {
 		t.Fatalf("diff: %+v %v", diff, err)
 	}
+	gitStatus, err := client.Inspect(ctx, run.ID, "git-status", "")
+	if err != nil || gitStatus.Git == nil || !gitStatus.Git.Repository || gitStatus.Git.Branch == "" || gitStatus.Git.Detached || len(gitStatus.Git.Commit) != 7 {
+		t.Fatalf("git-status: %+v %v", gitStatus, err)
+	}
 	if _, err = client.Inspect(ctx, run.ID, "read", "../outside"); err == nil {
 		t.Fatal("traversal accepted")
 	}
@@ -72,5 +76,30 @@ func TestWorkspaceInspectionHTTPChain(t *testing.T) {
 	}
 	if _, err = client.Inspect(ctx, run.ID, "read", "escape"); err == nil {
 		t.Fatal("symlink escape accepted")
+	}
+}
+
+func TestInspectGitStatusForNonRepositoryAndDetachedHead(t *testing.T) {
+	ctx := context.Background()
+	plain := t.TempDir()
+	result, err := inspectDirectory(ctx, plain, "git-status", "")
+	if err != nil || result.Git == nil || result.Git.Repository {
+		t.Fatalf("plain directory: %+v %v", result, err)
+	}
+
+	repository := t.TempDir()
+	if err = os.WriteFile(filepath.Join(repository, "README.md"), []byte("test\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init"}, {"add", "README.md"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"}, {"checkout", "--detach"}} {
+		command := exec.Command("git", args...)
+		command.Dir = repository
+		if output, commandErr := command.CombinedOutput(); commandErr != nil {
+			t.Fatalf("git: %s %v", output, commandErr)
+		}
+	}
+	result, err = inspectDirectory(ctx, repository, "git-status", "")
+	if err != nil || result.Git == nil || !result.Git.Repository || !result.Git.Detached || result.Git.Branch != "" || len(result.Git.Commit) != 7 {
+		t.Fatalf("detached repository: %+v %v", result, err)
 	}
 }

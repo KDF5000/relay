@@ -21,7 +21,14 @@ type InspectionResult struct {
 	Path    string      `json:"path"`
 	Content string      `json:"content"`
 	Entries []FileEntry `json:"entries"`
+	Git     *GitStatus  `json:"git,omitempty"`
 	Error   string      `json:"error,omitempty"`
+}
+type GitStatus struct {
+	Repository bool   `json:"repository"`
+	Branch     string `json:"branch,omitempty"`
+	Commit     string `json:"commit,omitempty"`
+	Detached   bool   `json:"detached,omitempty"`
 }
 type FileEntry struct {
 	Name      string `json:"name"`
@@ -51,7 +58,7 @@ func (h *Handler) inspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request := Inspection{ID: rand.Text(), RunID: run.ID, Operation: r.URL.Query().Get("operation"), Path: r.URL.Query().Get("path")}
-	if request.Operation != "list" && request.Operation != "read" && request.Operation != "diff" {
+	if request.Operation != "list" && request.Operation != "read" && request.Operation != "diff" && request.Operation != "git-status" {
 		writeJSON(w, 400, map[string]string{"error": "invalid inspection operation"})
 		return
 	}

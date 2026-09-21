@@ -128,6 +128,13 @@ func inspectDirectory(ctx context.Context, root, operation, path string) (httpap
 		result.Content = string(data)
 		return result, nil
 	}
+	if operation == "git-status" {
+		if path != "" {
+			return result, errors.New("git-status accepts only the workspace root")
+		}
+		result.Git = inspectGitStatus(ctx, root)
+		return result, nil
+	}
 	file, err := dir.Open(target)
 	if err != nil {
 		return result, err
@@ -181,4 +188,31 @@ func inspectDirectory(ctx context.Context, root, operation, path string) (httpap
 		return result, errors.New("unsupported operation")
 	}
 	return result, nil
+}
+
+func inspectGitStatus(ctx context.Context, root string) *httpapi.GitStatus {
+	status := &httpapi.GitStatus{}
+	inside := exec.CommandContext(ctx, "git", "--no-optional-locks", "rev-parse", "--is-inside-work-tree")
+	inside.Dir = root
+	inside.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	output, err := inside.Output()
+	if err != nil || strings.TrimSpace(string(output)) != "true" {
+		return status
+	}
+	status.Repository = true
+	branch := exec.CommandContext(ctx, "git", "--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD")
+	branch.Dir = root
+	branch.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	if output, branchErr := branch.Output(); branchErr == nil {
+		status.Branch = strings.TrimSpace(string(output))
+	} else {
+		status.Detached = true
+	}
+	commit := exec.CommandContext(ctx, "git", "--no-optional-locks", "rev-parse", "--short=7", "HEAD")
+	commit.Dir = root
+	commit.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	if output, commitErr := commit.Output(); commitErr == nil {
+		status.Commit = strings.TrimSpace(string(output))
+	}
+	return status
 }
