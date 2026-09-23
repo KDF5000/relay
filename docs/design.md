@@ -174,6 +174,12 @@ Node 注册时上报：
 }
 ```
 
+Node 并发支持运行期调整。Node 注册中的 `capacity` 表示已经应用的并发数，
+Control Plane 保存的 `desired_capacity` 表示 Host 请求的目标值。Host 通过
+`PUT /v1/nodes/{nodeID}/capacity` 更新目标值，Node 在后续注册心跳中读取并应用。
+降低并发不会取消正在执行的 Run；Node 会停止领取新任务，直到活动数低于目标值。
+当前并发范围为 1–32。
+
 调度器只有在以下条件全部满足时才允许 Node Claim：
 
 1. Node 支持指定 Runtime Provider；

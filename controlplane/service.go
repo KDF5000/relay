@@ -23,11 +23,14 @@ var (
 	ErrIncompatibleProtocol = errors.New("relay control plane: incompatible protocol")
 )
 
+const MaxNodeCapacity = 32
+
 // Storage is the durable state boundary of the distributed control plane.
 // Implementations must make every state transition and its events atomic.
 type Storage interface {
 	RegisterNode(context.Context, NodeRegistration) (Node, error)
 	Heartbeat(context.Context, string) (Node, error)
+	UpdateNodeCapacity(context.Context, string, int) (Node, error)
 	Submit(context.Context, relay.Request) (relay.Run, error)
 	Claim(context.Context, string, time.Duration) (Assignment, error)
 	Renew(context.Context, Assignment, time.Duration) (LeaseUpdate, error)
@@ -111,6 +114,9 @@ func (s *Service) RegisterNode(ctx context.Context, registration NodeRegistratio
 	if registration.Capacity <= 0 {
 		registration.Capacity = 1
 	}
+	if registration.Capacity > MaxNodeCapacity {
+		return Node{}, fmt.Errorf("capacity must be between 1 and %d", MaxNodeCapacity)
+	}
 	seenRuntimeIDs := make(map[string]struct{}, len(registration.Runtimes))
 	for index := range registration.Runtimes {
 		runtime := &registration.Runtimes[index]
@@ -127,6 +133,16 @@ func (s *Service) RegisterNode(ctx context.Context, registration NodeRegistratio
 
 func (s *Service) Heartbeat(ctx context.Context, nodeID string) (Node, error) {
 	return s.storage.Heartbeat(ctx, nodeID)
+}
+
+func (s *Service) UpdateNodeCapacity(ctx context.Context, nodeID string, capacity int) (Node, error) {
+	if nodeID == "" {
+		return Node{}, errors.New("node ID is required")
+	}
+	if capacity < 1 || capacity > MaxNodeCapacity {
+		return Node{}, fmt.Errorf("capacity must be between 1 and %d", MaxNodeCapacity)
+	}
+	return s.storage.UpdateNodeCapacity(ctx, nodeID, capacity)
 }
 
 func (s *Service) Submit(ctx context.Context, request relay.Request) (relay.Run, error) {

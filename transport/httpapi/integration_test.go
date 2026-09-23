@@ -84,6 +84,30 @@ func TestVersionAndProtocolMismatch(t *testing.T) {
 	}
 }
 
+func TestHostUpdatesNodeCapacity(t *testing.T) {
+	service := controlplane.New(time.Minute)
+	auth := httpapi.StaticTokens{{Value: "host", Scope: controlplane.AccessScope{Kind: controlplane.AccessHost}}, {Value: "node", Scope: controlplane.AccessScope{Kind: controlplane.AccessNode, Subject: "node-a"}}}
+	server := httptest.NewServer(httpapi.NewHandlerWithAuth(service, auth))
+	defer server.Close()
+	ctx := context.Background()
+	host := httpapi.NewAuthenticatedClient(server.URL, "host")
+	node := httpapi.NewAuthenticatedClient(server.URL, "node")
+	if _, err := node.RegisterNode(ctx, controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "node-a", Capacity: 2, Runtimes: []controlplane.Runtime{{Provider: "mock"}}}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := host.UpdateNodeCapacity(ctx, "node-a", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Capacity != 2 || updated.DesiredCapacity != 4 {
+		t.Fatalf("updated node = %+v", updated)
+	}
+	heartbeat, err := node.Heartbeat(ctx, "node-a")
+	if err != nil || heartbeat.DesiredCapacity != 4 {
+		t.Fatalf("heartbeat = %+v, %v", heartbeat, err)
+	}
+}
+
 func TestListEndpointsEncodeEmptyArrays(t *testing.T) {
 	service := controlplane.New(time.Minute)
 	server := httptest.NewServer(httpapi.NewHandler(service))

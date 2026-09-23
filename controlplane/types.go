@@ -79,9 +79,10 @@ type NodeRegistration struct {
 
 type Node struct {
 	NodeRegistration
-	Active   int       `json:"active"`
-	LastSeen time.Time `json:"last_seen"`
-	State    string    `json:"state"`
+	DesiredCapacity int       `json:"desired_capacity"`
+	Active          int       `json:"active"`
+	LastSeen        time.Time `json:"last_seen"`
+	State           string    `json:"state"`
 }
 
 const (

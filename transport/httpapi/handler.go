@@ -64,6 +64,7 @@ func NewHandlerWithAuth(service *controlplane.Service, auth Authenticator) *Hand
 	h.mux.HandleFunc("GET /v1/artifacts/{artifactID}", h.downloadArtifact)
 	h.mux.HandleFunc("POST /v1/runs/{runID}/cancel", h.cancelRun)
 	h.mux.HandleFunc("GET /v1/nodes", h.nodes)
+	h.mux.HandleFunc("PUT /v1/nodes/{nodeID}/capacity", h.updateNodeCapacity)
 	h.mux.HandleFunc("POST /v1/nodes/register", h.register)
 	h.mux.HandleFunc("POST /v1/nodes/{nodeID}/heartbeat", h.heartbeat)
 	h.mux.HandleFunc("POST /v1/nodes/{nodeID}/claim", h.claim)
@@ -275,6 +276,16 @@ func (h *Handler) cancelRun(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) nodes(w http.ResponseWriter, r *http.Request) {
 	value, err := h.service.Nodes(r.Context())
 	respondList(w, http.StatusOK, value, err)
+}
+func (h *Handler) updateNodeCapacity(w http.ResponseWriter, r *http.Request) {
+	var value struct {
+		Capacity int `json:"capacity"`
+	}
+	if !decode(w, r, &value) {
+		return
+	}
+	node, err := h.service.UpdateNodeCapacity(r.Context(), r.PathValue("nodeID"), value.Capacity)
+	respond(w, http.StatusOK, node, err)
 }
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	var value controlplane.NodeRegistration

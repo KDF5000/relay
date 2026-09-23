@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/KDF5000/relay"
@@ -56,6 +57,8 @@ type Worker struct {
 	Workspaces     workspace.Provider
 	Outbox         *Outbox
 	inspectionDirs sync.Map
+	capacity       atomic.Int64
+	activeSlots    atomic.Int64
 }
 
 // RunPool runs one claim loop per configured capacity slot. Cancelling
@@ -63,9 +66,8 @@ type Worker struct {
 // can drain in-flight runtimes before forcing shutdown.
 func (w *Worker) RunPool(claimCtx, executionCtx context.Context, poll time.Duration, onError func(error)) {
 	go w.serveInspections(claimCtx)
-	capacity := w.Registration.Capacity
-	if capacity <= 0 {
-		capacity = 1
+	if w.capacity.Load() == 0 {
+		w.SetCapacity(w.Registration.Capacity)
 	}
 	if poll <= 0 {
 		poll = time.Second
@@ -74,8 +76,8 @@ func (w *Worker) RunPool(claimCtx, executionCtx context.Context, poll time.Durat
 		onError = func(error) {}
 	}
 	var workers sync.WaitGroup
-	workers.Add(capacity)
-	for range capacity {
+	workers.Add(controlplane.MaxNodeCapacity)
+	for slot := 1; slot <= controlplane.MaxNodeCapacity; slot++ {
 		go func() {
 			defer workers.Done()
 			for {
@@ -84,7 +86,34 @@ func (w *Worker) RunPool(claimCtx, executionCtx context.Context, poll time.Durat
 					return
 				default:
 				}
+				if slot > w.Capacity() {
+					timer := time.NewTimer(poll)
+					select {
+					case <-claimCtx.Done():
+						timer.Stop()
+						return
+					case <-executionCtx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
+					continue
+				}
+				if !w.acquireSlot() {
+					timer := time.NewTimer(poll)
+					select {
+					case <-claimCtx.Done():
+						timer.Stop()
+						return
+					case <-executionCtx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
+					continue
+				}
 				_, err := w.RunOnce(executionCtx)
+				w.activeSlots.Add(-1)
 				if err != nil && !errors.Is(err, controlplane.ErrNoAssignment) && executionCtx.Err() == nil {
 					onError(err)
 				}
@@ -102,6 +131,36 @@ func (w *Worker) RunPool(claimCtx, executionCtx context.Context, poll time.Durat
 		}()
 	}
 	workers.Wait()
+}
+
+func (w *Worker) SetCapacity(capacity int) {
+	if capacity < 1 {
+		capacity = 1
+	}
+	if capacity > controlplane.MaxNodeCapacity {
+		capacity = controlplane.MaxNodeCapacity
+	}
+	w.capacity.Store(int64(capacity))
+}
+
+func (w *Worker) Capacity() int {
+	capacity := int(w.capacity.Load())
+	if capacity < 1 {
+		return 1
+	}
+	return capacity
+}
+
+func (w *Worker) acquireSlot() bool {
+	for {
+		active := w.activeSlots.Load()
+		if active >= int64(w.Capacity()) {
+			return false
+		}
+		if w.activeSlots.CompareAndSwap(active, active+1) {
+			return true
+		}
+	}
 }
 
 func (w *Worker) Register(ctx context.Context) (controlplane.Node, error) {

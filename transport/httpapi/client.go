@@ -284,6 +284,11 @@ func (c *Client) Nodes(ctx context.Context) ([]controlplane.Node, error) {
 	err := c.do(ctx, http.MethodGet, "/v1/nodes", nil, &out)
 	return out, err
 }
+func (c *Client) UpdateNodeCapacity(ctx context.Context, nodeID string, capacity int) (controlplane.Node, error) {
+	var out controlplane.Node
+	err := c.do(ctx, http.MethodPut, "/v1/nodes/"+url.PathEscape(nodeID)+"/capacity", map[string]int{"capacity": capacity}, &out)
+	return out, err
+}
 func (c *Client) RegisterNode(ctx context.Context, value controlplane.NodeRegistration) (controlplane.Node, error) {
 	var out controlplane.Node
 	err := c.do(ctx, http.MethodPost, "/v1/nodes/register", value, &out)

@@ -168,12 +168,23 @@ func main() {
 	}
 	defer outbox.Close()
 	worker := &node.Worker{Registration: cfg.Node, ControlPlane: client, Bindings: registry, Executors: executors, Workspaces: &workspace.Manager{Root: cfg.WorkspaceRoot}}
+	worker.SetCapacity(cfg.Node.Capacity)
 	worker.Outbox = outbox
 	executionCtx, cancelExecutions := context.WithCancel(context.Background())
 	defer cancelExecutions()
 	claimCtx, stopClaims := context.WithCancel(context.Background())
-	if _, err := worker.Register(executionCtx); err != nil {
+	registered, err := worker.Register(executionCtx)
+	if err != nil {
 		log.Fatal(err)
+	}
+	if registered.DesiredCapacity > 0 {
+		worker.SetCapacity(registered.DesiredCapacity)
+	}
+	if worker.Registration.Capacity != worker.Capacity() {
+		worker.Registration.Capacity = worker.Capacity()
+		if _, err := worker.Register(executionCtx); err != nil {
+			log.Fatal(err)
+		}
 	}
 	log.Printf("Relay node %s registered", cfg.Node.ID)
 	if err := outbox.Recover(executionCtx, client, func(message string) { log.Print(message) }); err != nil {
@@ -192,8 +203,18 @@ func main() {
 					cfg.Node.Runtimes = append(cfg.Node.Runtimes, probeRuntime(item))
 				}
 				worker.Registration.Runtimes = cfg.Node.Runtimes
-				if _, err := worker.Register(executionCtx); err != nil && executionCtx.Err() == nil {
+				worker.Registration.Capacity = worker.Capacity()
+				registered, err := worker.Register(executionCtx)
+				if err != nil && executionCtx.Err() == nil {
 					log.Printf("heartbeat failed: %v", err)
+				} else if err == nil && registered.DesiredCapacity > 0 {
+					worker.SetCapacity(registered.DesiredCapacity)
+					if worker.Registration.Capacity != worker.Capacity() {
+						worker.Registration.Capacity = worker.Capacity()
+						if _, err := worker.Register(executionCtx); err != nil && executionCtx.Err() == nil {
+							log.Printf("capacity acknowledgement failed: %v", err)
+						}
+					}
 				}
 			}
 		}

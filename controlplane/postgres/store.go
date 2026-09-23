@@ -99,8 +99,8 @@ func (s *Store) RegisterNode(ctx context.Context, registration controlplane.Node
 	capabilities, _ := json.Marshal(registration.Capabilities)
 	now := time.Now().UTC()
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO relay_nodes (id, version, protocol_version, labels, runtimes, capabilities, capacity, last_seen)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO relay_nodes (id, version, protocol_version, labels, runtimes, capabilities, capacity, desired_capacity, last_seen)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)
 		ON CONFLICT (id) DO UPDATE SET
 			version = EXCLUDED.version, protocol_version = EXCLUDED.protocol_version,
 			labels = EXCLUDED.labels, runtimes = EXCLUDED.runtimes,
@@ -114,6 +114,17 @@ func (s *Store) RegisterNode(ctx context.Context, registration controlplane.Node
 
 func (s *Store) Heartbeat(ctx context.Context, nodeID string) (controlplane.Node, error) {
 	command, err := s.pool.Exec(ctx, `UPDATE relay_nodes SET last_seen = now() WHERE id = $1`, nodeID)
+	if err != nil {
+		return controlplane.Node{}, err
+	}
+	if command.RowsAffected() == 0 {
+		return controlplane.Node{}, controlplane.ErrNotFound
+	}
+	return s.node(ctx, nodeID)
+}
+
+func (s *Store) UpdateNodeCapacity(ctx context.Context, nodeID string, capacity int) (controlplane.Node, error) {
+	command, err := s.pool.Exec(ctx, `UPDATE relay_nodes SET desired_capacity = $2 WHERE id = $1`, nodeID, capacity)
 	if err != nil {
 		return controlplane.Node{}, err
 	}
@@ -932,7 +943,7 @@ func scanRun(row rowScanner) (relay.Run, error) {
 }
 
 const nodeSelect = `
-	SELECT n.id, n.version, n.protocol_version, n.labels, n.runtimes, n.capabilities, n.capacity, n.last_seen,
+	SELECT n.id, n.version, n.protocol_version, n.labels, n.runtimes, n.capabilities, n.capacity, n.desired_capacity, n.last_seen,
 	       (SELECT count(*) FROM relay_attempts a
 	        WHERE a.node_id = n.id AND
 	              a.status IN ('running', 'leased') AND a.lease_expires_at > now()) AS active
@@ -941,7 +952,7 @@ const nodeSelect = `
 func scanNode(row rowScanner) (controlplane.Node, error) {
 	var node controlplane.Node
 	var labels, runtimes, capabilities []byte
-	err := row.Scan(&node.ID, &node.Version, &node.ProtocolVersion, &labels, &runtimes, &capabilities, &node.Capacity, &node.LastSeen, &node.Active)
+	err := row.Scan(&node.ID, &node.Version, &node.ProtocolVersion, &labels, &runtimes, &capabilities, &node.Capacity, &node.DesiredCapacity, &node.LastSeen, &node.Active)
 	if err != nil {
 		return controlplane.Node{}, err
 	}

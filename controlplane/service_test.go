@@ -61,6 +61,38 @@ func TestRegisterNodeRejectsIncompatibleProtocol(t *testing.T) {
 	}
 }
 
+func TestUpdateNodeCapacitySurvivesRegistration(t *testing.T) {
+	service := controlplane.New(time.Second)
+	ctx := context.Background()
+	registration := controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "node", Capacity: 2, Runtimes: []controlplane.Runtime{{Provider: "codex"}}}
+	if _, err := service.RegisterNode(ctx, registration); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := service.UpdateNodeCapacity(ctx, "node", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Capacity != 2 || updated.DesiredCapacity != 5 {
+		t.Fatalf("updated node = %+v", updated)
+	}
+	registered, err := service.RegisterNode(ctx, registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registered.DesiredCapacity != 5 {
+		t.Fatalf("desired capacity = %d, want 5", registered.DesiredCapacity)
+	}
+}
+
+func TestUpdateNodeCapacityValidatesRange(t *testing.T) {
+	service := controlplane.New(time.Second)
+	for _, capacity := range []int{0, controlplane.MaxNodeCapacity + 1} {
+		if _, err := service.UpdateNodeCapacity(context.Background(), "node", capacity); err == nil {
+			t.Fatalf("capacity %d accepted", capacity)
+		}
+	}
+}
+
 func TestSchedulerCanBindRunToRuntimeInstance(t *testing.T) {
 	ctx := context.Background()
 	service := controlplane.New(time.Minute)

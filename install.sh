@@ -75,6 +75,7 @@ case "$capacity" in
   ''|*[!0-9]*) fail "--capacity must be a positive integer" ;;
 esac
 [ "$capacity" -gt 0 ] || fail "--capacity must be a positive integer"
+[ "$capacity" -le 32 ] || fail "--capacity must not exceed 32"
 
 case "$runtime_choice" in
   auto|codex|trae|both) ;;

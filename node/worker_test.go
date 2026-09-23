@@ -521,3 +521,64 @@ func TestRunPoolUsesConfiguredCapacityConcurrently(t *testing.T) {
 		t.Fatalf("peak concurrency = %d, want 2", peak)
 	}
 }
+
+func TestRunPoolAppliesCapacityChangesWithoutCancellingActiveRuns(t *testing.T) {
+	service := controlplane.New(time.Second)
+	started := make(chan struct{}, 3)
+	release := make(chan struct{}, 3)
+	executor := relay.ExecutorFunc(func(ctx context.Context, _ relay.Execution) (relay.Result, error) {
+		started <- struct{}{}
+		select {
+		case <-ctx.Done():
+			return relay.Result{}, ctx.Err()
+		case <-release:
+			return relay.Result{Summary: "done"}, nil
+		}
+	})
+	worker := &node.Worker{Registration: controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "node", Runtimes: []controlplane.Runtime{{Provider: "parallel"}}, Capacity: 2}, ControlPlane: service, Executors: node.ExecutorMap{"parallel": executor}}
+	ctx := context.Background()
+	if _, err := worker.Register(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 3 {
+		if _, err := service.Submit(ctx, relay.Request{AgentID: "agent", IdempotencyKey: fmt.Sprintf("resize-%d", index), Runtime: relay.RuntimeRequirement{Provider: "parallel"}, Input: relay.Input{Prompt: "work"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claimCtx, stopClaims := context.WithCancel(ctx)
+	executionCtx, stopExecutions := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		worker.RunPool(claimCtx, executionCtx, time.Millisecond, func(err error) { t.Errorf("pool: %v", err) })
+		close(done)
+	}()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("initial runs did not start")
+		}
+	}
+	worker.SetCapacity(1)
+	release <- struct{}{}
+	select {
+	case <-started:
+		t.Fatal("third run started while one of two active runs remained after reducing capacity")
+	case <-time.After(40 * time.Millisecond):
+	}
+	release <- struct{}{}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("third run did not start after active runs drained to target capacity")
+	}
+	release <- struct{}{}
+	stopClaims()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		stopExecutions()
+		t.Fatal("worker pool did not drain")
+	}
+	stopExecutions()
+}

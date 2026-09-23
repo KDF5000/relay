@@ -53,12 +53,25 @@ func (s *MemoryStorage) RegisterNode(_ context.Context, registration NodeRegistr
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	if existing := s.nodes[registration.ID]; existing != nil {
+		desired := existing.DesiredCapacity
 		existing.NodeRegistration = registration
+		existing.DesiredCapacity = desired
 		existing.LastSeen = now
 		return *existing, nil
 	}
-	node := &Node{NodeRegistration: registration, LastSeen: now}
+	node := &Node{NodeRegistration: registration, DesiredCapacity: registration.Capacity, LastSeen: now}
 	s.nodes[registration.ID] = node
+	return *node, nil
+}
+
+func (s *MemoryStorage) UpdateNodeCapacity(_ context.Context, nodeID string, capacity int) (Node, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	node := s.nodes[nodeID]
+	if node == nil {
+		return Node{}, ErrNotFound
+	}
+	node.DesiredCapacity = capacity
 	return *node, nil
 }
 
