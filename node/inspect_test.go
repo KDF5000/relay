@@ -103,3 +103,40 @@ func TestInspectGitStatusForNonRepositoryAndDetachedHead(t *testing.T) {
 		t.Fatalf("detached repository: %+v %v", result, err)
 	}
 }
+
+func TestInspectDiffIncludesSubmoduleChanges(t *testing.T) {
+	ctx := context.Background()
+	submodule := t.TempDir()
+	if err := os.WriteFile(filepath.Join(submodule, "file.txt"), []byte("before\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, submodule, "init")
+	gitCommand(t, submodule, "add", "file.txt")
+	gitCommand(t, submodule, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+
+	repository := t.TempDir()
+	gitCommand(t, repository, "init")
+	gitCommand(t, repository, "-c", "protocol.file.allow=always", "submodule", "add", submodule, "vendor/module")
+	gitCommand(t, repository, "add", ".")
+	gitCommand(t, repository, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+	if err := os.WriteFile(filepath.Join(repository, "vendor/module/file.txt"), []byte("after\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := inspectDirectory(ctx, repository, "diff", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "diff --git a/vendor/module/file.txt b/vendor/module/file.txt") || !strings.Contains(result.Content, "+after") {
+		t.Fatalf("submodule file diff missing: %s", result.Content)
+	}
+}
+
+func gitCommand(t *testing.T, directory string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = directory
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %s %v", args, output, err)
+	}
+}

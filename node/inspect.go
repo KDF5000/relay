@@ -97,7 +97,7 @@ func inspectDirectory(ctx context.Context, root, operation, path string) (httpap
 		if path != "" {
 			return result, errors.New("diff accepts only the workspace root")
 		}
-		command := exec.CommandContext(ctx, "git", "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", ".")
+		command := exec.CommandContext(ctx, "git", "diff", "--no-ext-diff", "--no-textconv", "--submodule=diff", "HEAD", "--", ".")
 		command.Dir = root
 		pipe, err := command.StdoutPipe()
 		if err != nil {
