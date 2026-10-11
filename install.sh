@@ -8,7 +8,10 @@ install_dir="${RELAY_INSTALL_DIR:-${HOME}/.local/bin}"
 config_file="${RELAY_CONFIG_FILE:-${XDG_CONFIG_HOME:-${HOME}/.config}/relay/node.json}"
 data_dir="${RELAY_DATA_DIR:-${XDG_CACHE_HOME:-${HOME}/.cache}/relay}"
 server_url="${RELAY_SERVER_URL:-http://127.0.0.1:8787}"
-node_id="${RELAY_NODE_ID:-$(hostname 2>/dev/null || printf 'relay-node')}"
+steer_server_url="${STEER_SERVER_URL:-}"
+enrollment_token="${STEER_ENROLLMENT_TOKEN:-}"
+node_id="${RELAY_NODE_ID:-}"
+node_name="${RELAY_NODE_NAME:-$(hostname 2>/dev/null || printf 'relay-node')}"
 capacity="${RELAY_NODE_CAPACITY:-2}"
 node_token="${RELAY_NODE_TOKEN:-}"
 runtime_choice="${RELAY_RUNTIME:-auto}"
@@ -24,7 +27,11 @@ Usage:
 
 Options:
   --server URL       Relay Server URL (default: http://127.0.0.1:8787)
-  --node-id ID       Node identity (default: local hostname)
+  --steer-server URL Steer API base URL used to enroll this Node
+  --enrollment-token TOKEN
+                     One-time Steer enrollment token
+  --node-id ID       Stable Node identity (default: generated UUID)
+  --node-name NAME   Human-readable machine name (default: hostname)
   --capacity N       Maximum concurrent runs (default: 2)
   --runtime VALUE    auto, codex, trae, or both (default: auto)
   --token TOKEN      Node authentication token
@@ -35,7 +42,7 @@ Options:
   --install-service  Install and start a systemd user service or macOS LaunchAgent
   -h, --help         Show this help
 
-Environment variables with the RELAY_ prefix provide the same defaults.
+Environment variables with the RELAY_ and STEER_ prefixes provide the same defaults.
 EOF
 }
 
@@ -51,7 +58,10 @@ need_value() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --server) need_value "$@"; server_url=$2; shift 2 ;;
+    --steer-server) need_value "$@"; steer_server_url=$2; shift 2 ;;
+    --enrollment-token) need_value "$@"; enrollment_token=$2; shift 2 ;;
     --node-id) need_value "$@"; node_id=$2; shift 2 ;;
+    --node-name) need_value "$@"; node_name=$2; shift 2 ;;
     --capacity) need_value "$@"; capacity=$2; shift 2 ;;
     --runtime) need_value "$@"; runtime_choice=$2; shift 2 ;;
     --token) need_value "$@"; node_token=$2; shift 2 ;;
@@ -84,6 +94,20 @@ esac
 
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
+
+generate_node_id() {
+  if command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+    return
+  fi
+  if [ -r /proc/sys/kernel/random/uuid ]; then
+    cat /proc/sys/kernel/random/uuid
+    return
+  fi
+  od -An -N16 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+[ -n "$node_id" ] || node_id="node_$(generate_node_id)"
 
 case "$(uname -s)" in
   Darwin) target_os=darwin ;;
@@ -288,9 +312,25 @@ install_node_service() {
   esac
 }
 
-if [ -f "$config_file" ] && [ "$force_config" -ne 1 ]; then
+if [ -f "$config_file" ] && [ "$force_config" -ne 1 ] && { [ -n "$enrollment_token" ] || [ -n "$steer_server_url" ]; }; then
+  fail "an existing Node config cannot be enrolled in place; remove it or rerun with --force to create a new Node identity"
+elif [ -f "$config_file" ] && [ "$force_config" -ne 1 ]; then
   printf 'Keeping existing config: %s\n' "$config_file"
 else
+  if [ -n "$enrollment_token" ] || [ -n "$steer_server_url" ]; then
+    [ -n "$enrollment_token" ] || fail "--enrollment-token is required with --steer-server"
+    [ -n "$steer_server_url" ] || fail "--steer-server is required with --enrollment-token"
+    escaped_claim_token=$(json_escape "$enrollment_token")
+    escaped_claim_node=$(json_escape "$node_id")
+    escaped_claim_name=$(json_escape "$node_name")
+    claim_url="${steer_server_url%/}/relay-node-enrollments/claim"
+    claim_status=$(curl -sS --retry 2 --connect-timeout 15 -o "$temporary_dir/enrollment.json" -w '%{http_code}' \
+      -H 'Content-Type: application/json' \
+      -d "{\"token\":\"${escaped_claim_token}\",\"nodeId\":\"${escaped_claim_node}\",\"name\":\"${escaped_claim_name}\",\"capacity\":${capacity}}" \
+      "$claim_url") || fail "could not reach Steer enrollment endpoint"
+    [ "$claim_status" = "201" ] || fail "Steer enrollment failed (HTTP ${claim_status}): $(cat "$temporary_dir/enrollment.json")"
+    printf 'Enrolled Relay Node %s with Steer.\n' "$node_name"
+  fi
   config_dir=$(dirname "$config_file")
   mkdir -p "$config_dir"
   if [ -f "$config_file" ]; then
