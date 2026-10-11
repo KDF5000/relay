@@ -3,18 +3,23 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/KDF5000/relay"
 )
 
-// Inspection is a read-only RPC to the node that prepared a run's workspace.
+// Inspection is a read-only RPC for either a run-prepared workspace or a
+// WorkspaceSpec resolved directly on the selected Node.
 type Inspection struct {
-	ID        string `json:"id"`
-	RunID     string `json:"runId"`
-	Operation string `json:"operation"`
-	Path      string `json:"path"`
+	ID        string              `json:"id"`
+	RunID     string              `json:"runId,omitempty"`
+	Workspace relay.WorkspaceSpec `json:"workspace,omitempty"`
+	Operation string              `json:"operation"`
+	Path      string              `json:"path"`
 }
 type InspectionResult struct {
 	Root    string      `json:"root"`
@@ -58,11 +63,55 @@ func (h *Handler) inspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request := Inspection{ID: rand.Text(), RunID: run.ID, Operation: r.URL.Query().Get("operation"), Path: r.URL.Query().Get("path")}
+	h.dispatchInspection(w, r, attempts[len(attempts)-1].NodeID, request)
+}
+
+// inspectNodeWorkspace performs a read-only inspection directly on the
+// requested Node. Unlike run inspection, it does not require that the Node has
+// prepared this workspace for an earlier run.
+func (h *Handler) inspectNodeWorkspace(w http.ResponseWriter, r *http.Request) {
+	nodes, err := h.service.Nodes(r.Context())
+	if err != nil {
+		respond(w, http.StatusOK, nil, err)
+		return
+	}
+	nodeID := r.PathValue("nodeID")
+	found := false
+	for _, node := range nodes {
+		if node.ID != nodeID {
+			continue
+		}
+		found = true
+		if node.State != "online" {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "workspace node is offline"})
+			return
+		}
+		break
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "workspace node not found"})
+		return
+	}
+	workspaceJSON := r.URL.Query().Get("workspace")
+	var workspace relay.WorkspaceSpec
+	if workspaceJSON == "" || json.Unmarshal([]byte(workspaceJSON), &workspace) != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "a valid workspace is required"})
+		return
+	}
+	if workspace.Kind == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "workspace kind is required"})
+		return
+	}
+	request := Inspection{ID: rand.Text(), Workspace: workspace, Operation: r.URL.Query().Get("operation"), Path: r.URL.Query().Get("path")}
+	h.dispatchInspection(w, r, nodeID, request)
+}
+
+func (h *Handler) dispatchInspection(w http.ResponseWriter, r *http.Request, nodeID string, request Inspection) {
 	if request.Operation != "list" && request.Operation != "read" && request.Operation != "diff" && request.Operation != "git-status" {
 		writeJSON(w, 400, map[string]string{"error": "invalid inspection operation"})
 		return
 	}
-	call := &inspectionCall{node: attempts[len(attempts)-1].NodeID, request: request, result: make(chan InspectionResult, 1)}
+	call := &inspectionCall{node: nodeID, request: request, result: make(chan InspectionResult, 1)}
 	h.inspections.mu.Lock()
 	h.inspections.calls[request.ID] = call
 	h.inspections.mu.Unlock()
@@ -114,6 +163,16 @@ func (h *Handler) finishInspection(w http.ResponseWriter, r *http.Request) {
 func (c *Client) Inspect(ctx context.Context, runID, operation, path string) (InspectionResult, error) {
 	var result InspectionResult
 	err := c.do(ctx, "GET", "/v1/runs/"+runID+"/workspace?operation="+url.QueryEscape(operation)+"&path="+url.QueryEscape(path), nil, &result)
+	return result, err
+}
+
+func (c *Client) InspectNodeWorkspace(ctx context.Context, nodeID string, workspace relay.WorkspaceSpec, operation, path string) (InspectionResult, error) {
+	encodedWorkspace, err := json.Marshal(workspace)
+	if err != nil {
+		return InspectionResult{}, err
+	}
+	var result InspectionResult
+	err = c.do(ctx, "GET", "/v1/nodes/"+url.PathEscape(nodeID)+"/workspace?operation="+url.QueryEscape(operation)+"&path="+url.QueryEscape(path)+"&workspace="+url.QueryEscape(string(encodedWorkspace)), nil, &result)
 	return result, err
 }
 func (c *Client) ClaimInspection(ctx context.Context, nodeID string) (Inspection, error) {

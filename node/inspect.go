@@ -40,18 +40,38 @@ func (w *Worker) serveInspections(ctx context.Context) {
 			continue
 		}
 		result := httpapi.InspectionResult{}
-		if root := w.inspectionRoot(request.RunID); root != "" {
-			inspectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		inspectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		root, cleanup, prepareErr := w.inspectionRoot(inspectCtx, request)
+		if prepareErr == nil {
 			result, err = inspectDirectory(inspectCtx, root, request.Operation, request.Path)
-			cancel()
 		} else {
-			err = errors.New("workspace unavailable on this node for this run")
+			err = prepareErr
+		}
+		cancel()
+		if cleanup != nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 10*time.Second)
+			_ = cleanup(cleanupCtx)
+			cleanupCancel()
 		}
 		if err != nil {
 			result.Error = err.Error()
 		}
 		_ = client.FinishInspection(ctx, w.Registration.ID, request.ID, result)
 	}
+}
+
+func (w *Worker) inspectionRoot(ctx context.Context, request httpapi.Inspection) (string, func(context.Context) error, error) {
+	if request.Workspace.Kind != "" {
+		prepared, err := w.Workspaces.Prepare(ctx, "inspection-"+request.ID, "inspection", request.Workspace)
+		if err != nil {
+			return "", nil, err
+		}
+		return prepared.Dir, prepared.Cleanup, nil
+	}
+	if root := w.rememberedInspectionRoot(request.RunID); root != "" {
+		return root, nil, nil
+	}
+	return "", nil, errors.New("workspace unavailable on this node for this run")
 }
 func (w *Worker) inspectionIndex(runID string) string {
 	if manager, ok := w.Workspaces.(*workspace.Manager); ok && manager.Root != "" {
@@ -67,7 +87,7 @@ func (w *Worker) rememberInspection(runID, root string) {
 		}
 	}
 }
-func (w *Worker) inspectionRoot(runID string) string {
+func (w *Worker) rememberedInspectionRoot(runID string) string {
 	if root, ok := w.inspectionDirs.Load(runID); ok {
 		return root.(string)
 	}

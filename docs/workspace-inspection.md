@@ -1,9 +1,16 @@
 # Read-only workspace inspection
 
-Host API: `GET /v1/runs/{runID}/workspace?operation=list|read|diff|git-status&path=...`.
-The Server authorizes access to the run and routes the request to its latest
-attempt's Node. Nodes poll for inspection requests with their existing Node
-credentials; no inbound Node listener or SSH access is required.
+Host APIs:
+
+- `GET /v1/runs/{runID}/workspace?operation=list|read|diff|git-status&path=...`
+  inspects the workspace prepared for an existing run.
+- `GET /v1/nodes/{nodeID}/workspace?operation=list|read|diff|git-status&path=...&workspace={json}`
+  prepares and inspects the supplied workspace directly on the selected Node,
+  without requiring a prior run. The `workspace` query value is a JSON-encoded
+  `WorkspaceSpec`.
+
+Nodes poll for inspection requests with their existing Node credentials; no
+inbound Node listener or SSH access is required.
 
 `list` and `read` resolve relative paths using `os.Root`. Paths outside the
 prepared workspace, symlink escapes, non-regular files, binary content and text
@@ -16,13 +23,12 @@ It is not a per-run patch and may include changes made before the run.
 short commit with `detached: true`.
 
 The Node persists its run-to-prepared-directory mapping under the configured
-workspace root. Deleted or ephemeral workspaces cannot be inspected. Runs made
-before this feature was deployed need another execution to register their
-workspace. Steer forwards this API only after checking its own workspace's run
-link.
+workspace root for run inspection. Direct Node inspection prepares the supplied
+workspace for the duration of the request; local directory workspaces therefore
+remain inspectable after a Node is re-enrolled with a new identity.
 
-Deploy updated Relay Server and Relay Nodes together. The extension is additive;
-older Nodes do not process inspection requests, which time out after 15 seconds.
+Deploy updated Relay Server and Relay Nodes together. Direct workspace
+inspection requires protocol version 2.
 The broker is transient and single-server: Server restart fails in-flight reads;
 the user can retry. A multi-replica deployment requires a shared RPC broker or
 sticky routing and is not supported by this initial transport.
