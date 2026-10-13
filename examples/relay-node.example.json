@@ -31,6 +31,24 @@
       "tool_dir": "./bin",
       "work_root": "/tmp/relay-runs",
       "ephemeral": true
+    },
+    {
+      "id": "developer-macbook/claude",
+      "kind": "claude",
+      "provider": "claude",
+      "command": "claude",
+      "tool_dir": "./bin",
+      "work_root": "/tmp/relay-runs",
+      "ephemeral": true
+    },
+    {
+      "id": "developer-macbook/pi",
+      "kind": "pi",
+      "provider": "pi",
+      "command": "pi",
+      "tool_dir": "./bin",
+      "work_root": "/tmp/relay-runs",
+      "ephemeral": true
     }
   ],
   "bindings": [

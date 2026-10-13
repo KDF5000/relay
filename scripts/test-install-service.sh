@@ -50,10 +50,9 @@ done
 cp "$FAKE_RELEASE_DIR/$(basename "$url")" "$output"
 EOF
 
-cat >"$fake_bin/codex" <<'EOF'
-#!/bin/sh
-exit 0
-EOF
+for runtime_binary in codex traex claude pi; do
+  printf '#!/bin/sh\nexit 0\n' >"$fake_bin/$runtime_binary"
+done
 
 cat >"$fake_bin/systemctl" <<'EOF'
 #!/bin/sh
@@ -65,7 +64,7 @@ cat >"$fake_bin/launchctl" <<'EOF'
 printf '%s\n' "$*" >>"$FAKE_SERVICE_LOG"
 EOF
 
-chmod 755 "$fake_bin/uname" "$fake_bin/curl" "$fake_bin/codex" "$fake_bin/systemctl" "$fake_bin/launchctl"
+chmod 755 "$fake_bin/uname" "$fake_bin/curl" "$fake_bin/codex" "$fake_bin/traex" "$fake_bin/claude" "$fake_bin/pi" "$fake_bin/systemctl" "$fake_bin/launchctl"
 
 run_installer() {
   os_name=$1
@@ -117,5 +116,21 @@ grep -F 'kickstart -k gui/' "$test_root/Darwin-service.log" >/dev/null
 if command -v plutil >/dev/null 2>&1; then
   plutil -lint "$mac_plist" >/dev/null
 fi
+
+all_home="$test_root/home-all"
+mkdir -p "$all_home"
+HOME="$all_home" \
+  XDG_CONFIG_HOME="$all_home/.config" \
+  XDG_CACHE_HOME="$all_home/.cache" \
+  PATH="$fake_bin:$PATH" \
+  FAKE_OS=Linux \
+  FAKE_RELEASE_DIR="$release_dir" \
+  FAKE_SERVICE_LOG="$test_root/all-service.log" \
+  RELAY_DOWNLOAD_BASE_URL="https://example.invalid/release" \
+  sh "$repository_root/install.sh" --runtime all
+all_config="$all_home/.config/relay/node.json"
+for provider in codex trae claude pi; do
+  grep -F "\"provider\": \"$provider\"" "$all_config" >/dev/null
+done
 
 printf 'install service tests passed\n'

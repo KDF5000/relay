@@ -19,8 +19,11 @@ import (
 	"github.com/KDF5000/relay/binding"
 	"github.com/KDF5000/relay/controlplane"
 	"github.com/KDF5000/relay/node"
+	runtimeagentcli "github.com/KDF5000/relay/runtime/agentcli"
+	runtimeclaude "github.com/KDF5000/relay/runtime/claude"
 	runtimecodex "github.com/KDF5000/relay/runtime/codex"
 	runtimecommand "github.com/KDF5000/relay/runtime/command"
+	runtimepi "github.com/KDF5000/relay/runtime/pi"
 	runtimetrae "github.com/KDF5000/relay/runtime/trae"
 	"github.com/KDF5000/relay/transport/httpapi"
 	"github.com/KDF5000/relay/workspace"
@@ -143,6 +146,26 @@ func main() {
 			}
 			discoverRuntimeModels(item, "trae")
 			executors[item.Provider] = runtimetrae.Executor{Config: compatibleConfig(*item)}
+		} else if isClaude(*item) {
+			if item.Command == "" {
+				item.Command = "claude"
+			}
+			if item.Version == "" {
+				if detected, probeErr := runtimeclaude.ProbeVersion(context.Background(), item.Command); probeErr == nil {
+					item.Version = detected
+				}
+			}
+			executors[item.Provider] = runtimeclaude.Executor{Config: agentConfig(*item)}
+		} else if isPi(*item) {
+			if item.Command == "" {
+				item.Command = "pi"
+			}
+			if item.Version == "" {
+				if detected, probeErr := runtimepi.ProbeVersion(context.Background(), item.Command); probeErr == nil {
+					item.Version = detected
+				}
+			}
+			executors[item.Provider] = runtimepi.Executor{Config: agentConfig(*item)}
 		} else {
 			executors[item.Provider] = runtimecommand.Executor{Command: item.Command, Args: item.Args, Env: item.Env, InheritEnv: item.InheritEnv}
 		}
@@ -293,6 +316,34 @@ func probeRuntime(item runtimeConfig) controlplane.Runtime {
 		}
 		return result
 	}
+	if isClaude(item) {
+		command := item.Command
+		if command == "" {
+			command = "claude"
+		}
+		version, err := runtimeclaude.ProbeVersion(context.Background(), command)
+		if err != nil {
+			result.State = "unhealthy"
+			result.Message = err.Error()
+		} else {
+			result.Version = version
+		}
+		return result
+	}
+	if isPi(item) {
+		command := item.Command
+		if command == "" {
+			command = "pi"
+		}
+		version, err := runtimepi.ProbeVersion(context.Background(), command)
+		if err != nil {
+			result.State = "unhealthy"
+			result.Message = err.Error()
+		} else {
+			result.Version = version
+		}
+		return result
+	}
 	if _, err := exec.LookPath(item.Command); err != nil {
 		result.State = "unhealthy"
 		result.Message = err.Error()
@@ -345,6 +396,19 @@ func catalogContains(values []controlplane.RuntimeModel, expected string) bool {
 func isTrae(item runtimeConfig) bool {
 	return item.Kind == "trae" || item.Kind == "traex" || item.Kind == "trae-cli" || (item.Kind == "" && (item.Provider == "trae" || item.Provider == "traex"))
 }
+
+func isClaude(item runtimeConfig) bool {
+	return item.Kind == "claude" || item.Kind == "claude-code" || (item.Kind == "" && item.Provider == "claude")
+}
+
+func isPi(item runtimeConfig) bool {
+	return item.Kind == "pi" || item.Kind == "pi-coding-agent" || (item.Kind == "" && item.Provider == "pi")
+}
+
 func compatibleConfig(item runtimeConfig) runtimecodex.Config {
 	return runtimecodex.Config{Binary: item.Command, Protocol: item.Protocol, ToolDir: item.ToolDir, PassEnv: item.PassEnv, Env: item.Env, Model: item.Model, Profile: item.Profile, ReasoningEffort: item.ReasoningEffort, ServiceTier: item.ServiceTier, WorkRoot: item.WorkRoot, Ephemeral: item.Ephemeral, AllowedTools: item.AllowedTools, DisallowedTools: item.DisallowedTools, ShellToolTimeout: item.ShellToolTimeout, IgnoreUserConfig: item.IgnoreUserConfig, IgnoreRules: item.IgnoreRules, ExtraArgs: item.Args}
+}
+
+func agentConfig(item runtimeConfig) runtimeagentcli.Config {
+	return runtimeagentcli.Config{Binary: item.Command, ToolDir: item.ToolDir, PassEnv: item.PassEnv, Env: item.Env, Model: item.Model, WorkRoot: item.WorkRoot, Ephemeral: item.Ephemeral, AllowedTools: item.AllowedTools, DisallowedTools: item.DisallowedTools, ExtraArgs: item.Args}
 }

@@ -20,7 +20,7 @@ Server / Node。Web Playground 只是验证接口的参考应用，不定义核�
 Relay 负责：
 
 - 管理执行机器；
-- 管理 Codex、Trae 和自定义 Runtime；
+- 管理 Codex、Trae、Claude Code、Pi 和自定义 Runtime；
 - 调度、并发、Lease、取消和重试；
 - 工作目录和指令生成；
 - Agent 进程监管；
@@ -431,6 +431,21 @@ model/profile 和 ephemeral 等核心契约。Relay 复用 Codex-like 执行内�
 Node 配置的 `kind` 可使用 `trae`、`traex` 或 `trae-cli`，建议稳定的业务 Provider 固定为
 `trae`，不要让二进制别名泄漏到任务模型。
 
+### 10.3 Claude Code 与 Pi
+
+Claude Code Adapter 使用 `claude --print --output-format stream-json --verbose`，解析结构化
+assistant/result 事件和 `session_id`；Pi Adapter 使用 `pi --mode json`，解析 session header、
+增量 message event 和最终 `message_end`。两者都支持：
+
+- Provider 分别固定为 `claude` 和 `pi`；
+- 非 ephemeral 会话的原生续接，以及续接不可用时使用 Host recovery prompt 重建会话；
+- Runtime 级 model、允许/禁止工具和额外 CLI 参数；
+- `CLAUDE.md` 或 `AGENTS.md` 稳定指令、输入图片、文件 Tool Bridge、受限环境和进程树取消；
+- `runtime.claude.*` / `runtime.pi.*` 事件与独立的最终消息 Artifact。
+
+Claude 与 Pi 的权限和信任策略仍由各自 CLI 配置控制；Relay 只在 Node 配置显式给出
+`allowed_tools` 或 `disallowed_tools` 时映射对应 CLI 参数。
+
 ## 11. 指令模型
 
 指令按作用域分为：
@@ -487,6 +502,8 @@ relay/
 ├── runtime/command/          通用 Runtime CLI 与 Tool Bridge
 ├── runtime/codex/            真实 Codex CLI Adapter
 ├── runtime/trae/             真实 TraeCode CLI Adapter
+├── runtime/claude/           Claude Code headless Adapter
+├── runtime/pi/               Pi JSON mode Adapter
 ├── sdk/                      业务项目 SDK
 ├── transport/httpapi/        当前 Host/Node 网络协议
 ├── cmd/relay-server/         Control Plane 进程
