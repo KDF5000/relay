@@ -242,6 +242,37 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-stream","
 	}
 }
 
+func TestAppServerAcceptsMessageLargerThanScannerLimit(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+[ "$1" = "app-server" ] || exit 8
+read -r initialize
+printf '%s\n' '{"id":1,"result":{"userAgent":"fake"}}'
+read -r initialized
+read -r thread_start
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-large"}}}'
+read -r turn_start
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-large"}}}'
+printf '%s' '{"method":"item/completed","params":{"item":{"type":"commandExecution","aggregatedOutput":"'
+dd if=/dev/zero bs=1048576 count=9 2>/dev/null | tr '\000' x
+printf '%s\n' '"}}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"itemId":"final-1","delta":"completed after large event"}}'
+printf '%s\n' '{"method":"turn/completed","params":{"turn":{"id":"turn-large","items":[],"status":"completed"}}}'
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executor := runtimecodex.Executor{Config: runtimecodex.Config{Binary: fake, Protocol: "app-server", WorkRoot: dir, Ephemeral: true}}
+	result, err := executor.Execute(context.Background(), relay.Execution{RunID: "run-large", Instructions: relay.CompiledInstructions{Prompt: "work"}, Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary != "completed after large event" {
+		t.Fatalf("unexpected summary: %q", result.Summary)
+	}
+}
+
 func TestAppServerFallsBackWhenPersistedThreadCannotResume(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "codex")

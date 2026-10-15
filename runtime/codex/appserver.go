@@ -1,12 +1,12 @@
 package codex
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,15 +102,14 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 		}
 	}()
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	decoder := json.NewDecoder(stdout)
 	writeRequest := func(value any) error {
 		return json.NewEncoder(stdin).Encode(value)
 	}
 	if err := writeRequest(map[string]any{"id": 1, "method": "initialize", "params": map[string]any{"clientInfo": map[string]string{"name": "relay", "version": "0.1"}, "capabilities": map[string]bool{"experimentalApi": true}}}); err != nil {
 		return relay.Result{}, err
 	}
-	if _, err := waitRPCResponse(scanner, 1, nil); err != nil {
+	if _, err := waitRPCResponse(decoder, 1, nil); err != nil {
 		return relay.Result{}, appServerError(fork.Name, err, stderr.String())
 	}
 	if err := writeRequest(map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
@@ -138,7 +137,7 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	if err := writeRequest(map[string]any{"id": threadRequestID, "method": threadMethod, "params": threadParams}); err != nil {
 		return relay.Result{}, err
 	}
-	threadResponse, err := waitRPCResponse(scanner, threadRequestID, func(message rpcMessage) { emitAppServerEvent(ctx, execution, fork.Name, message) })
+	threadResponse, err := waitRPCResponse(decoder, threadRequestID, func(message rpcMessage) { emitAppServerEvent(ctx, execution, fork.Name, message) })
 	if err != nil && resuming {
 		if execution.Emit != nil {
 			execution.Emit(ctx, "runtime."+fork.Name+".thread.resume_failed", map[string]string{"thread_id": execution.RuntimeSessionID, "error": err.Error()})
@@ -155,7 +154,7 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 		if err := writeRequest(map[string]any{"id": threadRequestID, "method": threadMethod, "params": threadParams}); err != nil {
 			return relay.Result{}, err
 		}
-		threadResponse, err = waitRPCResponse(scanner, threadRequestID, func(message rpcMessage) { emitAppServerEvent(ctx, execution, fork.Name, message) })
+		threadResponse, err = waitRPCResponse(decoder, threadRequestID, func(message rpcMessage) { emitAppServerEvent(ctx, execution, fork.Name, message) })
 	}
 	if err != nil {
 		return relay.Result{}, appServerError(fork.Name, err, stderr.String())
@@ -181,10 +180,13 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	messageItemID := ""
 	turnStarted := false
 	turnCompleted := false
-	for scanner.Scan() {
+	for {
 		var rpc rpcMessage
-		if err := json.Unmarshal(scanner.Bytes(), &rpc); err != nil {
-			continue
+		if err := decoder.Decode(&rpc); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return relay.Result{}, fmt.Errorf("relay %s: read app-server stream: %w", fork.Name, err)
 		}
 		if rpc.ID == turnRequestID {
 			if rpc.Error != nil {
@@ -241,9 +243,6 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 			break
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return relay.Result{}, fmt.Errorf("relay %s: read app-server stream: %w", fork.Name, err)
-	}
 	if !turnStarted || !turnCompleted || message.Len() == 0 {
 		if turnStarted && !turnCompleted {
 			return relay.Result{}, appServerError(fork.Name, errors.New("app-server ended before turn/completed"), stderr.String())
@@ -272,11 +271,14 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	return result, nil
 }
 
-func waitRPCResponse(scanner *bufio.Scanner, id int, onNotification func(rpcMessage)) (json.RawMessage, error) {
-	for scanner.Scan() {
+func waitRPCResponse(decoder *json.Decoder, id int, onNotification func(rpcMessage)) (json.RawMessage, error) {
+	for {
 		var message rpcMessage
-		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
-			continue
+		if err := decoder.Decode(&message); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, errors.New("app-server closed the event stream")
+			}
+			return nil, fmt.Errorf("read app-server stream: %w", err)
 		}
 		if message.ID != id {
 			if onNotification != nil {
@@ -289,10 +291,6 @@ func waitRPCResponse(scanner *bufio.Scanner, id int, onNotification func(rpcMess
 		}
 		return message.Result, nil
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return nil, errors.New("app-server closed the event stream")
 }
 
 func emitAppServerEvent(ctx context.Context, execution relay.Execution, provider string, message rpcMessage) {

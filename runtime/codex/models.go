@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -49,13 +48,12 @@ func ProbeModels(ctx context.Context, config Config, fork ForkOptions) ([]ModelI
 		_ = command.Wait()
 	}()
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	decoder := json.NewDecoder(stdout)
 	write := func(value any) error { return json.NewEncoder(stdin).Encode(value) }
 	if err := write(map[string]any{"id": 1, "method": "initialize", "params": map[string]any{"clientInfo": map[string]string{"name": "relay-model-probe", "version": "0.1"}, "capabilities": map[string]bool{"experimentalApi": true}}}); err != nil {
 		return nil, err
 	}
-	if _, err := waitRPCResponse(scanner, 1, nil); err != nil {
+	if _, err := waitRPCResponse(decoder, 1, nil); err != nil {
 		return nil, appServerError(fork.Name, err, stderr.String())
 	}
 	if err := write(map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
@@ -73,7 +71,7 @@ func ProbeModels(ctx context.Context, config Config, fork ForkOptions) ([]ModelI
 		if err := write(map[string]any{"id": id, "method": "model/list", "params": params}); err != nil {
 			return nil, err
 		}
-		data, err := waitRPCResponse(scanner, id, nil)
+		data, err := waitRPCResponse(decoder, id, nil)
 		if err != nil {
 			return nil, appServerError(fork.Name, err, stderr.String())
 		}
