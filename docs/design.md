@@ -20,7 +20,7 @@ Server / Node。Web Playground 只是验证接口的参考应用，不定义核�
 Relay 负责：
 
 - 管理执行机器；
-- 管理 Codex、Trae、Claude Code、Pi 和自定义 Runtime；
+- 管理 Codex、Trae、Claude Code、Pi、OpenCode 和自定义 Runtime；
 - 调度、并发、Lease、取消和重试；
 - 工作目录和指令生成；
 - Agent 进程监管；
@@ -408,7 +408,7 @@ Thread 丢失、无法恢复或任务迁移到其他 Node 时，Node 使用 Host
 Prompt 新建线程，成功后用新的 Thread ID 原子替换旧映射。通用 Interaction 接口存在并不
 意味着每个 Runtime 已接通原生审批。
 
-Codex、Trae、Claude 和 Pi Runtime 可以在结束前写入 `.relay/artifacts.json`，声明需要独立上传的业务交付
+Codex、Trae、Claude、Pi 和 OpenCode Runtime 可以在结束前写入 `.relay/artifacts.json`，声明需要独立上传的业务交付
 文件。每项包含相对工作目录的 `path`、语义化 `type`，以及可选的 `name` 和
 `content_type`。Node 会在每次执行前清理旧清单，执行后校验文件存在、为普通文件且解析
 后的真实路径仍位于工作目录内，再将它们作为独立 Artifact 上传。`.relay/` 内部文件不可
@@ -445,6 +445,21 @@ assistant/result 事件和 `session_id`；Pi Adapter 使用 `pi --mode json`，�
 
 Claude 与 Pi 的权限和信任策略仍由各自 CLI 配置控制；Relay 只在 Node 配置显式给出
 `allowed_tools` 或 `disallowed_tools` 时映射对应 CLI 参数。
+
+### 10.4 OpenCode
+
+OpenCode Adapter 使用 `opencode run --format json`，解析 `text`、`step_start`、
+`step_finish` 和 `error` 事件。v2 附加 `--standalone`，让文件 Tool Bridge 环境和取消
+绑定到当前执行的进程树。文本块映射为 `assistant.message.completed`，最终回答取最后
+一个以 `stop` 或 `end_turn` 结束的步骤，工具调用步骤和未完成输出不能算成功。
+
+Provider / kind 使用 `opencode`；模型通过 `opencode models` 发现，ID 保持
+`provider/model` 格式，默认模型由 Node 的 `model` 配置指定。`--session` 续接原生会话；
+v2 会先检查会话是否存在，丢失时使用 Host recovery prompt 重建，避免 CLI 静默新建
+空会话。`ephemeral` 每次新建会话并不向 Relay 返回会话 ID，CLI 仍可能本地保存。
+
+继续复用 `AGENTS.md`、图片附件、受限环境、声明式 Artifact 和进程监管。
+工具权限由 OpenCode 配置，`allowed_tools` / `disallowed_tools` 会明确报错。
 
 ## 11. 指令模型
 
@@ -504,6 +519,7 @@ relay/
 ├── runtime/trae/             真实 TraeCode CLI Adapter
 ├── runtime/claude/           Claude Code headless Adapter
 ├── runtime/pi/               Pi JSON mode Adapter
+├── runtime/opencode/         OpenCode JSON mode Adapter
 ├── sdk/                      业务项目 SDK
 ├── transport/httpapi/        当前 Host/Node 网络协议
 ├── cmd/relay-server/         Control Plane 进程

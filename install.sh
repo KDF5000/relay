@@ -33,7 +33,7 @@ Options:
   --node-id ID       Stable Node identity (default: generated UUID)
   --node-name NAME   Human-readable machine name (default: hostname)
   --capacity N       Maximum concurrent runs (default: 2)
-  --runtime VALUE    auto, codex, trae, claude, pi, both, or all (default: auto)
+  --runtime VALUE    auto, codex, trae, claude, pi, opencode, both, or all (default: auto)
   --token TOKEN      Node authentication token
   --version VERSION  Release tag such as v0.2.0 (default: latest)
   --install-dir DIR  Binary directory (default: ~/.local/bin)
@@ -88,8 +88,8 @@ esac
 [ "$capacity" -le 32 ] || fail "--capacity must not exceed 32"
 
 case "$runtime_choice" in
-  auto|codex|trae|claude|pi|both|all) ;;
-  *) fail "--runtime must be auto, codex, trae, claude, pi, both, or all" ;;
+  auto|codex|trae|claude|pi|opencode|both|all) ;;
+  *) fail "--runtime must be auto, codex, trae, claude, pi, opencode, both, or all" ;;
 esac
 
 command -v curl >/dev/null 2>&1 || fail "curl is required"
@@ -168,31 +168,36 @@ trae_command=$(find_command traex)
 [ -n "$trae_command" ] || trae_command=$(find_command trae-cli)
 claude_command=$(find_command claude)
 pi_command=$(find_command pi)
+opencode_command=$(find_command opencode)
 
 include_codex=0
 include_trae=0
 include_claude=0
 include_pi=0
+include_opencode=0
 case "$runtime_choice" in
   auto)
     [ -n "$codex_command" ] && include_codex=1
     [ -n "$trae_command" ] && include_trae=1
     [ -n "$claude_command" ] && include_claude=1
     [ -n "$pi_command" ] && include_pi=1
+    [ -n "$opencode_command" ] && include_opencode=1
     ;;
   codex) include_codex=1 ;;
   trae) include_trae=1 ;;
   claude) include_claude=1 ;;
   pi) include_pi=1 ;;
+  opencode) include_opencode=1 ;;
   both) include_codex=1; include_trae=1 ;;
-  all) include_codex=1; include_trae=1; include_claude=1; include_pi=1 ;;
+  all) include_codex=1; include_trae=1; include_claude=1; include_pi=1; include_opencode=1 ;;
 esac
 
 [ "$include_codex" -eq 0 ] || [ -n "$codex_command" ] || fail "Codex CLI was not found in PATH"
 [ "$include_trae" -eq 0 ] || [ -n "$trae_command" ] || fail "Trae CLI (traex or trae-cli) was not found in PATH"
 [ "$include_claude" -eq 0 ] || [ -n "$claude_command" ] || fail "Claude Code CLI was not found in PATH"
 [ "$include_pi" -eq 0 ] || [ -n "$pi_command" ] || fail "Pi CLI was not found in PATH"
-[ "$include_codex" -eq 1 ] || [ "$include_trae" -eq 1 ] || [ "$include_claude" -eq 1 ] || [ "$include_pi" -eq 1 ] || fail "no supported Runtime found; install Codex, Trae, Claude Code, or Pi, or pass --runtime"
+[ "$include_opencode" -eq 0 ] || [ -n "$opencode_command" ] || fail "OpenCode CLI was not found in PATH"
+[ "$include_codex" -eq 1 ] || [ "$include_trae" -eq 1 ] || [ "$include_claude" -eq 1 ] || [ "$include_pi" -eq 1 ] || [ "$include_opencode" -eq 1 ] || fail "no supported Runtime found; install Codex, Trae, Claude Code, Pi, or OpenCode, or pass --runtime"
 
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -379,6 +384,12 @@ else
     escaped_command=$(json_escape "$pi_command")
     runtime_json="${runtime_json}${separator}
     {\"id\": \"${escaped_node}/pi\", \"kind\": \"pi\", \"provider\": \"pi\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+    separator=","
+  fi
+  if [ "$include_opencode" -eq 1 ]; then
+    escaped_command=$(json_escape "$opencode_command")
+    runtime_json="${runtime_json}${separator}
+    {\"id\": \"${escaped_node}/opencode\", \"kind\": \"opencode\", \"provider\": \"opencode\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
   fi
 
   token_line=""

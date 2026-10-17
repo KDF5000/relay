@@ -23,14 +23,14 @@ func TestProbeRuntimeAdvertisesModels(t *testing.T) {
 	}
 }
 
-func TestProbeRuntimeSupportsClaudeAndPi(t *testing.T) {
+func TestProbeRuntimeSupportsNativeAgentCLIs(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture is Unix-specific")
 	}
 	dir := t.TempDir()
 	for _, test := range []struct {
 		name, version string
-	}{{"claude", "2.1.30"}, {"pi", "0.55.1"}} {
+	}{{"claude", "2.1.30"}, {"pi", "0.55.1"}, {"opencode", "2.0.32"}} {
 		command := filepath.Join(dir, test.name)
 		if err := os.WriteFile(command, []byte("#!/bin/sh\necho '"+test.name+" "+test.version+"'\n"), 0o755); err != nil {
 			t.Fatal(err)
@@ -68,5 +68,22 @@ printf '%s\n' '{"type":"response","id":"relay-state","success":true,"data":{"mod
 	got := probeRuntime(item)
 	if len(got.ModelCatalog) != 1 || len(got.Models) != 1 || got.Models[0] != "zai-coding-cn/glm-5.3" || got.DefaultModel != got.Models[0] {
 		t.Fatalf("Pi registration omitted model metadata: %+v", got)
+	}
+}
+
+func TestDiscoverOpenCodeModelsAdvertisedAtRegistration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	command := filepath.Join(t.TempDir(), "opencode")
+	script := "#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo 'opencode v2.0.32'; exit 0; fi\nprintf '%s\\n' 'provider/model-a' 'provider/model-b'\n"
+	if err := os.WriteFile(command, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	item := runtimeConfig{Provider: "opencode", Command: command, Model: "provider/model-b"}
+	discoverRuntimeModels(&item, "opencode")
+	got := probeRuntime(item)
+	if !isOpenCode(item) || got.State != "healthy" || got.Version != "2.0.32" || len(got.ModelCatalog) != 2 || got.DefaultModel != "provider/model-b" {
+		t.Fatalf("OpenCode registration = %+v", got)
 	}
 }

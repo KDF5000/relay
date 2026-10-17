@@ -49,6 +49,15 @@
       "tool_dir": "./bin",
       "work_root": "/tmp/relay-runs",
       "ephemeral": true
+    },
+    {
+      "id": "developer-macbook/opencode",
+      "kind": "opencode",
+      "provider": "opencode",
+      "command": "opencode",
+      "tool_dir": "./bin",
+      "work_root": "/tmp/relay-runs",
+      "ephemeral": false
     }
   ],
   "bindings": [

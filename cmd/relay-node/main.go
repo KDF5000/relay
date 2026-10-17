@@ -23,6 +23,7 @@ import (
 	runtimeclaude "github.com/KDF5000/relay/runtime/claude"
 	runtimecodex "github.com/KDF5000/relay/runtime/codex"
 	runtimecommand "github.com/KDF5000/relay/runtime/command"
+	runtimeopencode "github.com/KDF5000/relay/runtime/opencode"
 	runtimepi "github.com/KDF5000/relay/runtime/pi"
 	runtimetrae "github.com/KDF5000/relay/runtime/trae"
 	"github.com/KDF5000/relay/transport/httpapi"
@@ -167,6 +168,17 @@ func main() {
 			}
 			discoverRuntimeModels(item, "pi")
 			executors[item.Provider] = runtimepi.Executor{Config: agentConfig(*item)}
+		} else if isOpenCode(*item) {
+			if item.Command == "" {
+				item.Command = "opencode"
+			}
+			if item.Version == "" {
+				if detected, probeErr := runtimeopencode.ProbeVersion(context.Background(), item.Command); probeErr == nil {
+					item.Version = detected
+				}
+			}
+			discoverRuntimeModels(item, "opencode")
+			executors[item.Provider] = runtimeopencode.Executor{Config: agentConfig(*item)}
 		} else {
 			executors[item.Provider] = runtimecommand.Executor{Command: item.Command, Args: item.Args, Env: item.Env, InheritEnv: item.InheritEnv}
 		}
@@ -345,6 +357,16 @@ func probeRuntime(item runtimeConfig) controlplane.Runtime {
 		}
 		return result
 	}
+	if isOpenCode(item) {
+		version, err := runtimeopencode.ProbeVersion(context.Background(), item.Command)
+		if err != nil {
+			result.State = "unhealthy"
+			result.Message = err.Error()
+		} else {
+			result.Version = version
+		}
+		return result
+	}
 	if _, err := exec.LookPath(item.Command); err != nil {
 		result.State = "unhealthy"
 		result.Message = err.Error()
@@ -359,7 +381,9 @@ func discoverRuntimeModels(item *runtimeConfig, kind string) {
 		models []runtimecodex.ModelInfo
 		err    error
 	)
-	if kind == "pi" {
+	if kind == "opencode" {
+		models, err = runtimeopencode.ProbeModels(ctx, agentConfig(*item))
+	} else if kind == "pi" {
 		models, err = runtimepi.ProbeModels(ctx, agentConfig(*item))
 	} else if kind == "trae" {
 		models, err = runtimetrae.ProbeModels(ctx, compatibleConfig(*item))
@@ -406,6 +430,10 @@ func isClaude(item runtimeConfig) bool {
 
 func isPi(item runtimeConfig) bool {
 	return item.Kind == "pi" || item.Kind == "pi-coding-agent" || (item.Kind == "" && item.Provider == "pi")
+}
+
+func isOpenCode(item runtimeConfig) bool {
+	return item.Kind == "opencode" || (item.Kind == "" && item.Provider == "opencode")
 }
 
 func compatibleConfig(item runtimeConfig) runtimecodex.Config {

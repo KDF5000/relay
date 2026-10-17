@@ -71,7 +71,7 @@ curl http://127.0.0.1:8787/version
 
 ### 2. 接入 Node
 
-在已经安装 Codex、`traex` 或 `trae-cli` 的机器上执行。Server 地址必须能从这台机器访问；远程 Server 不能使用 `127.0.0.1`。
+在已经安装 Codex、`traex`/`trae-cli`、Claude Code、Pi 或 OpenCode 的机器上执行。Server 地址必须能从这台机器访问；远程 Server 不能使用 `127.0.0.1`。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KDF5000/relay/main/install.sh \
@@ -237,7 +237,7 @@ tail -f ~/.cache/relay/logs/node.log
 ~/.local/bin/relay-node -config ~/.config/relay/node.json
 ```
 
-常用安装参数包括 `--node-id`、`--capacity`、`--runtime auto|codex|trae|both`、`--version`、`--install-dir`、`--config` 和 `--force`。默认保留已有配置；传入 `--force` 时会先创建带时间戳的备份。
+常用安装参数包括 `--node-id`、`--capacity`、`--runtime auto|codex|trae|claude|pi|opencode|both|all`、`--version`、`--install-dir`、`--config` 和 `--force`。`auto` 自动发现所有已安装的受支持 CLI，`both` 仍表示 Codex 和 Trae，`all` 要求五种 CLI 全部可用。默认保留已有配置；传入 `--force` 时会先创建带时间戳的备份。
 
 ## 终端客户端
 
@@ -326,6 +326,9 @@ Git Workspace Provider 的可选参数，在 Relay 内没有业务工作流语�
 - 旧的 `exec` 协议仍可兼容非交互式 CLI，但只能返回完整消息。
 - Trae exec 模式不能使用 `permission_mode=default`，因为无头进程无法请求审批。可以省略该配置使用 headless 默认值，或使用 `bypass_permissions`/兼容无头执行的 `custom` 策略。
 - Runtime 子进程默认只继承受限环境。额外变量需要在 Node 配置中通过 `pass_env` 或 `env` 显式声明。
+
+
+OpenCode 使用 `opencode run --format json`；v2 使用 `--standalone`，确保 Relay 能管理执行进程和取消。通过 `--session` 续接会话，旧会话丢失时用完整历史提示词恢复。文本块转为 `assistant.message.completed`，最后一个成功步骤的文本作为最终回答。`opencode models` 提供 `provider/model` 模型列表；Node 配置中的 `model` 可声明默认模型。`ephemeral` 每次新建会话且不向 Relay 返回会话 ID，OpenCode 仍可能在本地保存会话。工具权限在 OpenCode 自身配置，适配器不支持 `allowed_tools` / `disallowed_tools`。
 
 ## 开发与验证
 

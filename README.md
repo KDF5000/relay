@@ -11,7 +11,7 @@ Application / Host
 Relay Server ── PostgreSQL / Artifact Store
         │ Node Protocol
         ▼
-Relay Node ── Codex / Trae / Claude / Pi / Custom Runtime
+Relay Node ── Codex / Trae / Claude / Pi / OpenCode / Custom Runtime
         │
         └── Capability Binding: CLI / HTTP / RPC / Go
 ```
@@ -21,7 +21,7 @@ Relay Node ── Codex / Trae / Claude / Pi / Custom Runtime
 - Multi-machine Node registration, heartbeats, capacity, and runtime inventory
 - Strict Server/Node protocol handshake with independently reported product versions
 - Fixed runtime-instance assignment or automatic scheduling by provider and capability
-- Native Codex, Trae, Claude Code, and Pi runtime adapters with streaming output
+- Native Codex, Trae, Claude Code, Pi, and OpenCode runtime adapters with streaming output
 - Durable runs, attempts, leases, retries, cancellation, timeouts, and ordered SSE events
 - Local, temporary, Git mirror, and Git worktree workspace providers
 - Artifact storage on local volumes or S3-compatible object storage
@@ -69,7 +69,7 @@ Open the Web Playground at <http://127.0.0.1:8787/console/> and enter `RELAY_HOS
 
 ### 2. Connect a Node
 
-Run this on a machine that already has Codex, `traex`/`trae-cli`, Claude Code, or Pi installed. Replace the Server URL with an address reachable from that machine; do not use `127.0.0.1` for a remote Server.
+Run this on a machine that already has Codex, `traex`/`trae-cli`, Claude Code, Pi, or OpenCode installed. Replace the Server URL with an address reachable from that machine; do not use `127.0.0.1` for a remote Server.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KDF5000/relay/main/install.sh \
@@ -77,7 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/KDF5000/relay/main/install.sh \
     sh -s -- --server https://relay.example.com --install-service
 ```
 
-The installer supports macOS and Linux on AMD64 and ARM64. It verifies the release checksum, installs `relay-node`, `relay-tool`, and `relayctl` under `~/.local/bin`, discovers supported runtime CLIs from `PATH`, and writes the Node configuration to `~/.config/relay/node.json`. Discovered Codex, Trae, Claude Code, and Pi runtimes default to non-ephemeral execution so Relay can preserve their native conversation threads across Runs.
+The installer supports macOS and Linux on AMD64 and ARM64. It verifies the release checksum, installs `relay-node`, `relay-tool`, and `relayctl` under `~/.local/bin`, discovers supported runtime CLIs from `PATH`, and writes the Node configuration to `~/.config/relay/node.json`. Discovered Codex, Trae, Claude Code, Pi, and OpenCode runtimes default to non-ephemeral execution so Relay can preserve their native conversation threads across Runs.
 
 `--install-service` installs and starts a user-level system service:
 
@@ -258,7 +258,7 @@ Run the installer without `--install-service` to keep the Node in the foreground
 ~/.local/bin/relay-node -config ~/.config/relay/node.json
 ```
 
-Useful installer options include `--node-id`, `--capacity`, `--runtime auto|codex|trae|claude|pi|both|all`, `--version`, `--install-dir`, `--config`, and `--force`. `auto` discovers every installed supported CLI, `both` retains its original Codex-plus-Trae meaning, and `all` requires all four. Existing configuration is preserved unless `--force` is set, in which case the installer creates a timestamped backup.
+Useful installer options include `--node-id`, `--capacity`, `--runtime auto|codex|trae|claude|pi|opencode|both|all`, `--version`, `--install-dir`, `--config`, and `--force`. `auto` discovers every installed supported CLI, `both` retains its original Codex-plus-Trae meaning, and `all` requires all five. Existing configuration is preserved unless `--force` is set, in which case the installer creates a timestamped backup.
 
 ## Terminal client
 
@@ -343,13 +343,14 @@ Long-running runtimes can create approval or input interactions, pause, and resu
 - Relay has separate product and Node protocol versions. `relay-server --version`, `relay-node --version`,
   and `relayctl --version` print both. A Node registration with a different protocol version is rejected
   with HTTP `426 Upgrade Required`; product-version differences are diagnostic and do not affect scheduling.
-- Codex and Trae use `"protocol": "app-server"` for incremental `assistant.message.delta` events and runtime model discovery. Claude Code uses headless `stream-json`; Pi uses its JSON event stream.
-- Non-ephemeral Codex, Trae, Claude, and Pi runs persist the provider-native thread/session for the same tenant, project, session, Agent, Runtime, and Node. Later Runs send only the new turn through native resume, preserving the Runtime's own context compaction. If the thread cannot be resumed or execution moves to another Node, Relay starts a replacement thread with the Host-provided recovery prompt.
+- Codex and Trae use `"protocol": "app-server"` for incremental `assistant.message.delta` events and runtime model discovery. Claude Code uses headless `stream-json`; Pi uses its JSON event stream; OpenCode uses `opencode run --format json` (with `--standalone` on v2). OpenCode emits completed text blocks as `assistant.message.completed`, with the last successful step supplying the final answer.
+- Non-ephemeral Codex, Trae, Claude, Pi, and OpenCode runs persist the provider-native thread/session for the same tenant, project, session, Agent, Runtime, and Node. Later Runs send only the new turn through native resume, preserving the Runtime's own context compaction. If the thread cannot be resumed or execution moves to another Node, Relay starts a replacement thread with the Host-provided recovery prompt.
+- OpenCode resumes native sessions with `--session`, attaches images with `--file`, and discovers `provider/model` IDs through `opencode models`. Set `model` in the Node configuration to advertise a default. `ephemeral` starts a fresh session and omits its ID from the Relay result; OpenCode may still retain it locally. Configure tool permissions in OpenCode itself; Relay rejects `allowed_tools` and `disallowed_tools` for this adapter.
 - App-server execution succeeds only after the runtime reports `turn/completed`; partial output is retained as events when the protocol ends early, but the Run fails.
 - The legacy `exec` protocol remains available for compatible non-interactive CLIs but only produces complete messages.
-- Relay does not override runtime permission policy. Legacy Node `sandbox` and `permission_mode` fields are ignored; configure permissions in Codex, Trae, Claude Code, or Pi itself.
+- Relay does not override runtime permission policy. Legacy Node `sandbox` and `permission_mode` fields are ignored; configure permissions in Codex, Trae, Claude Code, Pi, or OpenCode itself.
 - Runtime subprocesses receive a restricted environment by default. Add variables explicitly through `pass_env` or `env` in the Node configuration.
-- Codex, Trae, Claude, and Pi runtimes can declare durable output files by writing `.relay/artifacts.json` in the work directory before they finish. Each entry contains a relative `path`, a semantic `type`, and optional `name` and `content_type`, for example `{"artifacts":[{"path":"report.md","type":"report","content_type":"text/markdown"}]}`. Relay validates that declared files stay inside the workspace and uploads only those declared deliverables. Final answers remain in the Run summary/output and conversation events; instruction files and final-message files are kept locally for execution/diagnostics and are not uploaded automatically. S3 uploads use a sequential 8 MiB part buffer.
+- Codex, Trae, Claude, Pi, and OpenCode runtimes can declare durable output files by writing `.relay/artifacts.json` in the work directory before they finish. Each entry contains a relative `path`, a semantic `type`, and optional `name` and `content_type`, for example `{"artifacts":[{"path":"report.md","type":"report","content_type":"text/markdown"}]}`. Relay validates that declared files stay inside the workspace and uploads only those declared deliverables. Final answers remain in the Run summary/output and conversation events; instruction files and final-message files are kept locally for execution/diagnostics and are not uploaded automatically. S3 uploads use a sequential 8 MiB part buffer.
 
 ## Development
 
