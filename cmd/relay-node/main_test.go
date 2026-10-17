@@ -52,3 +52,21 @@ func TestRuntimeConfigIgnoresLegacyPermissionFields(t *testing.T) {
 	}
 	_ = compatibleConfig(cfg.Runtimes[0])
 }
+
+func TestDiscoverPiModelsAdvertisedAtRegistration(t *testing.T) {
+	command := filepath.Join(t.TempDir(), "pi")
+	script := `#!/bin/sh
+if [ "$1" = '--version' ]; then echo 'pi 1.3.0'; exit 0; fi
+printf '%s\n' '{"type":"response","id":"relay-models","success":true,"data":{"models":[{"id":"glm-5.3","provider":"zai-coding-cn","name":"GLM-5.3"}]}}'
+printf '%s\n' '{"type":"response","id":"relay-state","success":true,"data":{"model":{"id":"glm-5.3","provider":"zai-coding-cn"}}}'
+`
+	if err := os.WriteFile(command, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	item := runtimeConfig{Kind: "pi", Provider: "pi", Command: command}
+	discoverRuntimeModels(&item, "pi")
+	got := probeRuntime(item)
+	if len(got.ModelCatalog) != 1 || len(got.Models) != 1 || got.Models[0] != "zai-coding-cn/glm-5.3" || got.DefaultModel != got.Models[0] {
+		t.Fatalf("Pi registration omitted model metadata: %+v", got)
+	}
+}

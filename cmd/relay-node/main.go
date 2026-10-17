@@ -165,6 +165,7 @@ func main() {
 					item.Version = detected
 				}
 			}
+			discoverRuntimeModels(item, "pi")
 			executors[item.Provider] = runtimepi.Executor{Config: agentConfig(*item)}
 		} else {
 			executors[item.Provider] = runtimecommand.Executor{Command: item.Command, Args: item.Args, Env: item.Env, InheritEnv: item.InheritEnv}
@@ -358,7 +359,9 @@ func discoverRuntimeModels(item *runtimeConfig, kind string) {
 		models []runtimecodex.ModelInfo
 		err    error
 	)
-	if kind == "trae" {
+	if kind == "pi" {
+		models, err = runtimepi.ProbeModels(ctx, agentConfig(*item))
+	} else if kind == "trae" {
 		models, err = runtimetrae.ProbeModels(ctx, compatibleConfig(*item))
 	} else {
 		models, err = runtimecodex.ProbeModels(ctx, compatibleConfig(*item), runtimecodex.ForkOptions{Name: "codex", DefaultBinary: "codex"})

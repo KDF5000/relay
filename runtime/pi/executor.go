@@ -56,10 +56,7 @@ func (e Executor) Execute(ctx context.Context, execution relay.Execution) (relay
 	command := exec.CommandContext(ctx, binary, args...)
 	runtimeprocess.Configure(command)
 	command.Dir = run.WorkDir
-	command.Env = agentcli.Environment(config, run,
-		"PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR",
-		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
-		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_PROFILE")
+	command.Env = piEnvironment(config, run)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return relay.Result{}, err
