@@ -64,6 +64,7 @@ func NewHandlerWithAuth(service *controlplane.Service, auth Authenticator) *Hand
 	h.mux.HandleFunc("GET /v1/runs/{runID}/artifacts", h.artifacts)
 	h.mux.HandleFunc("GET /v1/artifacts/{artifactID}", h.downloadArtifact)
 	h.mux.HandleFunc("POST /v1/runs/{runID}/cancel", h.cancelRun)
+	h.mux.HandleFunc("POST /v1/node-credentials", h.issueNodeCredential)
 	h.mux.HandleFunc("GET /v1/nodes", h.nodes)
 	h.mux.HandleFunc("PUT /v1/nodes/{nodeID}/capacity", h.updateNodeCapacity)
 	h.mux.HandleFunc("POST /v1/nodes/register", h.register)

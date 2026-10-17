@@ -39,3 +39,21 @@ func authorizeRunScope(ctx context.Context, run relay.Run) error {
 	}
 	return nil
 }
+
+// Scoped Node credentials cannot use another Node's attempt, even if a lease
+// was accidentally disclosed. Storage still validates the lease and attempt
+// atomically, including expiry and reassignment, after this identity check.
+func (s *Service) authorizeNodeRun(ctx context.Context, runID string) error {
+	scope, ok := AccessFrom(ctx)
+	if !ok || scope.Kind != AccessNode || scope.Subject == "" {
+		return nil
+	}
+	run, err := s.storage.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.Attempt.NodeID != scope.Subject {
+		return ErrInvalidLease
+	}
+	return nil
+}

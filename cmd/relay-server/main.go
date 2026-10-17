@@ -25,7 +25,7 @@ func main() {
 	artifactRoot := flag.String("artifact-root", envOr("RELAY_ARTIFACT_ROOT", "./.relay/artifacts"), "local artifact blob directory")
 	artifactBackend := flag.String("artifact-backend", envOr("RELAY_ARTIFACT_BACKEND", "file"), "artifact backend: file or s3")
 	hostToken := flag.String("host-token", os.Getenv("RELAY_HOST_TOKEN"), "host bearer token")
-	nodeToken := flag.String("node-token", os.Getenv("RELAY_NODE_TOKEN"), "node bearer token")
+	nodeToken := flag.String("node-token", os.Getenv("RELAY_NODE_TOKEN"), "node credential signing root and legacy node bearer token")
 	tenantID := flag.String("tenant", envOr("RELAY_TENANT_ID", "default"), "tenant assigned to the host token")
 	projectID := flag.String("project", envOr("RELAY_PROJECT_ID", "default"), "project assigned to the host token")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -78,7 +78,7 @@ func main() {
 		if *hostToken == "" || *nodeToken == "" {
 			log.Fatal("host-token and node-token must both be configured")
 		}
-		handler = httpapi.NewHandlerWithAuth(service, httpapi.StaticTokens{{Value: *hostToken, Scope: controlplane.AccessScope{Kind: controlplane.AccessHost, TenantID: *tenantID, ProjectID: *projectID}}, {Value: *nodeToken, Scope: controlplane.AccessScope{Kind: controlplane.AccessNode}}})
+		handler = httpapi.NewHandlerWithAuth(service, httpapi.NewNodeTokenAuthenticator(httpapi.Token{Value: *hostToken, Scope: controlplane.AccessScope{Kind: controlplane.AccessHost, TenantID: *tenantID, ProjectID: *projectID}}, *nodeToken))
 	}
 	server := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("Relay control plane listening on %s", *listen)

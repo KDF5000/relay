@@ -378,6 +378,22 @@ Use `-memory` only for tests and temporary demos. Production deployments require
 
 When authentication is enabled, both `RELAY_HOST_TOKEN` and `RELAY_NODE_TOKEN` must be configured. `relayctl` reads `RELAY_HOST_TOKEN`; a Node reads the token from its configuration or `RELAY_NODE_TOKEN`.
 
+Applications such as Steer can provision Nodes without distributing the shared
+root token. Call `POST /v1/node-credentials` with the host bearer token and
+`{"nodeId":"node_generated-id"}`. The response contains `nodeId` and `nodeToken`;
+pass `nodeToken` to the installer as `RELAY_NODE_TOKEN`. The credential permits
+registration, heartbeats, inspection and work only for that Node. Its Runtime
+IDs must use the `nodeId/` prefix, which the installer generates automatically.
+Node credentials cannot access host APIs or issue more credentials.
+
+Credentials are signed using the server's `RELAY_NODE_TOKEN`, persist across
+restarts and do not expire with an application's one-time enrollment code.
+All server replicas must use the same root. Rotating the root invalidates all
+issued credentials; individual revocation is not yet supported. Existing
+shared-token Nodes remain compatible. The HTTP endpoint requires the server's
+`NodeTokenAuthenticator`; it is disabled without authentication or with only
+`StaticTokens`. Node binaries and protocol version do not change.
+
 The Web Agent Playground is embedded into the Server binary. After changing files under `transport/httpapi/console/`, rebuild or restart `relay-server` so Go can embed the updated assets. Runs, events, results, and artifacts are persisted by the Relay API.
 
 Pushing a `v*` tag runs the [release workflow](.github/workflows/release.yml), verifies the project, and publishes checksum-protected archives for Linux and macOS on AMD64 and ARM64.

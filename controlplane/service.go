@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -123,6 +124,9 @@ func (s *Service) RegisterNode(ctx context.Context, registration NodeRegistratio
 		if runtime.ID == "" {
 			runtime.ID = RuntimeInstanceID(registration.ID, runtime.Provider)
 		}
+		if scope, ok := AccessFrom(ctx); ok && scope.Kind == AccessNode && scope.Subject != "" && !strings.HasPrefix(runtime.ID, scope.Subject+"/") {
+			return Node{}, errors.New("runtime ID must belong to the authenticated node")
+		}
 		if _, duplicate := seenRuntimeIDs[runtime.ID]; duplicate {
 			return Node{}, errors.New("runtime instance IDs must be unique within a node")
 		}
@@ -184,6 +188,9 @@ func (s *Service) Claim(ctx context.Context, nodeID string) (Assignment, error) 
 }
 
 func (s *Service) Start(ctx context.Context, assignment Assignment) error {
+	if err := s.authorizeNodeRun(ctx, assignment.RunID); err != nil {
+		return err
+	}
 	err := s.storage.Start(ctx, assignment)
 	if err == nil {
 		s.notifyRun(assignment.RunID)
@@ -192,6 +199,9 @@ func (s *Service) Start(ctx context.Context, assignment Assignment) error {
 }
 
 func (s *Service) Renew(ctx context.Context, assignment Assignment) (LeaseUpdate, error) {
+	if err := s.authorizeNodeRun(ctx, assignment.RunID); err != nil {
+		return LeaseUpdate{}, err
+	}
 	return s.storage.Renew(ctx, assignment, s.leaseTTL)
 }
 
@@ -216,6 +226,9 @@ func (s *Service) CancelRun(ctx context.Context, runID string, request CancelReq
 }
 
 func (s *Service) AcknowledgeCancellation(ctx context.Context, assignment Assignment) error {
+	if err := s.authorizeNodeRun(ctx, assignment.RunID); err != nil {
+		return err
+	}
 	err := s.storage.AcknowledgeCancellation(ctx, assignment)
 	if err == nil {
 		s.notifyRun(assignment.RunID)
@@ -224,6 +237,9 @@ func (s *Service) AcknowledgeCancellation(ctx context.Context, assignment Assign
 }
 
 func (s *Service) AppendEvent(ctx context.Context, runID, attemptID, lease, eventType string, data any, eventIDs ...string) error {
+	if err := s.authorizeNodeRun(ctx, runID); err != nil {
+		return err
+	}
 	err := s.storage.AppendEvent(ctx, runID, attemptID, lease, eventType, data, eventIDs...)
 	if err == nil {
 		s.notifyRun(runID)
@@ -232,6 +248,9 @@ func (s *Service) AppendEvent(ctx context.Context, runID, attemptID, lease, even
 }
 
 func (s *Service) Complete(ctx context.Context, assignment Assignment, result relay.Result) error {
+	if err := s.authorizeNodeRun(ctx, assignment.RunID); err != nil {
+		return err
+	}
 	err := s.storage.Complete(ctx, assignment, result)
 	if err == nil {
 		s.notifyRun(assignment.RunID)
@@ -240,6 +259,9 @@ func (s *Service) Complete(ctx context.Context, assignment Assignment, result re
 }
 
 func (s *Service) Fail(ctx context.Context, assignment Assignment, cause string) error {
+	if err := s.authorizeNodeRun(ctx, assignment.RunID); err != nil {
+		return err
+	}
 	err := s.storage.Fail(ctx, assignment, cause)
 	if err == nil {
 		s.notifyRun(assignment.RunID)
@@ -314,6 +336,9 @@ func (s *Service) Nodes(ctx context.Context) ([]Node, error) {
 }
 
 func (s *Service) UploadArtifact(ctx context.Context, assignment Assignment, artifact relay.Artifact, reader io.Reader) (relay.Artifact, error) {
+	if err := s.authorizeNodeRun(ctx, assignment.RunID); err != nil {
+		return relay.Artifact{}, err
+	}
 	artifact.ID = newControlPlaneID("artifact")
 	artifact.RunID = assignment.RunID
 	artifact.Ref = "/v1/artifacts/" + artifact.ID
@@ -352,10 +377,16 @@ func (s *Service) OpenArtifact(ctx context.Context, artifactID string) (relay.Ar
 }
 
 func (s *Service) ReserveCapability(ctx context.Context, a Assignment, key, hash string, request relay.CapabilityRequest) (relay.CapabilityReservation, error) {
+	if err := s.authorizeNodeRun(ctx, a.RunID); err != nil {
+		return relay.CapabilityReservation{}, err
+	}
 	return s.storage.ReserveCapability(ctx, a, key, hash, request)
 }
 
 func (s *Service) FinishCapability(ctx context.Context, a Assignment, reservation relay.CapabilityReservation, result relay.CapabilityResult, cause string) error {
+	if err := s.authorizeNodeRun(ctx, a.RunID); err != nil {
+		return err
+	}
 	return s.storage.FinishCapability(ctx, a, reservation, result, cause)
 }
 
@@ -374,12 +405,18 @@ func (s *Service) Attempts(ctx context.Context, runID string) ([]relay.Attempt, 
 	return s.storage.Attempts(ctx, runID)
 }
 func (s *Service) CreateInteraction(ctx context.Context, a Assignment, r relay.InteractionRequest) (relay.Interaction, error) {
+	if err := s.authorizeNodeRun(ctx, a.RunID); err != nil {
+		return relay.Interaction{}, err
+	}
 	if r.Kind != relay.InteractionInput && r.Kind != relay.InteractionApproval {
 		return relay.Interaction{}, errors.New("interaction kind must be input or approval")
 	}
 	return s.storage.CreateInteraction(ctx, a, r)
 }
 func (s *Service) GetInteraction(ctx context.Context, a Assignment, id string) (relay.Interaction, error) {
+	if err := s.authorizeNodeRun(ctx, a.RunID); err != nil {
+		return relay.Interaction{}, err
+	}
 	return s.storage.GetInteraction(ctx, a, id)
 }
 func (s *Service) Interactions(ctx context.Context, runID string) ([]relay.Interaction, error) {

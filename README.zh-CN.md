@@ -354,6 +354,17 @@ make postgres-test
 
 启用鉴权时必须同时配置 `RELAY_HOST_TOKEN` 和 `RELAY_NODE_TOKEN`。`relayctl` 读取 `RELAY_HOST_TOKEN`；Node 从配置文件或 `RELAY_NODE_TOKEN` 读取 Token。
 
+Steer 等应用可以通过 Host Token 调用 `POST /v1/node-credentials`，请求体为
+`{"nodeId":"node_generated-id"}`，获取 `nodeId` 和 `nodeToken`，再将后者作为
+安装命令中的 `RELAY_NODE_TOKEN`。用户无需获取服务器的共享 Token。独立凭据只能
+注册、维持心跳、检查和执行对应 Node 的工作，不能访问 Host API 或签发其他凭据。
+Runtime ID 必须以 `nodeId/` 开头，安装器会自动生成这一前缀。
+
+独立凭据由服务端的 `RELAY_NODE_TOKEN` 签名，重启后仍有效，不随应用的一次性认领码
+过期。多副本必须保持相同的签名根密钥；更换根密钥会使所有已签发凭据失效，当前不支持
+单独吊销某个凭据。原共享 Token 仍兼容。签发接口需要 `NodeTokenAuthenticator`，
+无鉴权或仅使用 `StaticTokens` 时不会开放签发。无需升级 Node 二进制或协议版本。
+
 Web Agent Playground 内嵌在 Server 二进制中。修改 `transport/httpapi/console/` 后需要重新构建或重启 `relay-server`，让 Go 重新嵌入静态资源。Run、Event、Result 和 Artifact 由 Relay API 持久化。
 
 推送 `v*` Tag 会运行 [Release workflow](.github/workflows/release.yml)，验证项目并发布 Linux/macOS、AMD64/ARM64 的带校验和压缩包。
