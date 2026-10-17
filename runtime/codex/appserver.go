@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/KDF5000/relay"
+	runtimeartifacts "github.com/KDF5000/relay/runtime/artifacts"
 	runtimeprocess "github.com/KDF5000/relay/runtime/process"
 	"github.com/KDF5000/relay/runtime/toolbridge"
 )
@@ -49,15 +50,14 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return relay.Result{}, err
 	}
-	instructionPath, err := relay.MaterializeInstructions(workDir, fork.InstructionProvider, execution.Instructions)
-	if err != nil {
+	if _, err := relay.MaterializeInstructions(workDir, fork.InstructionProvider, execution.Instructions); err != nil {
 		return relay.Result{}, err
 	}
 	resultDir := filepath.Join(workDir, ".relay")
 	if err := os.MkdirAll(resultDir, 0o700); err != nil {
 		return relay.Result{}, err
 	}
-	if err := resetArtifactManifest(workDir); err != nil {
+	if err := runtimeartifacts.Reset(workDir); err != nil {
 		return relay.Result{}, err
 	}
 	imagePaths, cleanupImages, err := relay.MaterializeInputImages(workDir, execution.Input)
@@ -258,12 +258,10 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 		execution.Emit(ctx, "assistant.final.completed", map[string]string{"text": finalMessage})
 		execution.Emit(ctx, "runtime."+fork.Name+".completed", map[string]string{"thread_id": threadID})
 	}
-	artifacts := []relay.Artifact{{Type: "instruction_file", Ref: instructionPath, Name: filepath.Base(instructionPath)}, {Type: fork.Name + "_final_message", Ref: finalPath, Name: filepath.Base(finalPath)}}
-	declared, err := collectDeclaredArtifacts(workDir)
+	artifacts, err := runtimeartifacts.Collect(workDir)
 	if err != nil {
 		return relay.Result{}, fmt.Errorf("relay %s: collect artifacts: %w", fork.Name, err)
 	}
-	artifacts = append(artifacts, declared...)
 	result = relay.Result{Summary: finalMessage, Output: output, Artifacts: artifacts}
 	if !config.Ephemeral {
 		result.RuntimeSessionID = threadID

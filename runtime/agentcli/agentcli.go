@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/KDF5000/relay"
+	runtimeartifacts "github.com/KDF5000/relay/runtime/artifacts"
 	"github.com/KDF5000/relay/runtime/toolbridge"
 )
 
@@ -59,6 +60,9 @@ func Prepare(execution relay.Execution, config Config, provider string) (Run, er
 	if err := os.MkdirAll(resultDir, 0o700); err != nil {
 		return Run{}, err
 	}
+	if err := runtimeartifacts.Reset(workDir); err != nil {
+		return Run{}, err
+	}
 	images, cleanupImages, err := relay.MaterializeInputImages(workDir, execution.Input)
 	if err != nil {
 		return Run{}, err
@@ -82,14 +86,11 @@ func (r Run) Close() {
 	}
 }
 
-func (r Run) Artifacts(provider, message string) ([]relay.Artifact, error) {
+func (r Run) Artifacts(message string) ([]relay.Artifact, error) {
 	if err := os.WriteFile(r.FinalPath, []byte(strings.TrimSpace(message)), 0o600); err != nil {
 		return nil, err
 	}
-	return []relay.Artifact{
-		{Type: "instruction_file", Ref: r.Instruction, Name: filepath.Base(r.Instruction)},
-		{Type: provider + "_final_message", Ref: r.FinalPath, Name: filepath.Base(r.FinalPath)},
-	}, nil
+	return runtimeartifacts.Collect(r.WorkDir)
 }
 
 func Environment(config Config, run Run, providerEnv ...string) []string {

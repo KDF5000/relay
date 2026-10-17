@@ -58,6 +58,9 @@ printf '%s' 'Let me inspect the adapter.Codex completed the real adapter contrac
 	if result.Summary != "Codex completed the real adapter contract" {
 		t.Fatalf("unexpected summary: %q", result.Summary)
 	}
+	if len(result.Artifacts) != 0 {
+		t.Fatalf("plain answer produced artifacts: %+v", result.Artifacts)
+	}
 	if len(events) != 8 || events[1] != "runtime.codex.thread.started" || events[2] != "runtime.codex.item.completed" || events[3] != "assistant.message.completed" || events[6] != "assistant.final.completed" {
 		t.Fatalf("unexpected events: %v", events)
 	}
@@ -236,6 +239,9 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-stream","
 	}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(result.Artifacts) != 0 {
+		t.Fatalf("plain app-server answer produced artifacts: %+v", result.Artifacts)
 	}
 	if result.Summary != "hello world" || final != "hello world" || strings.Join(deltas, "") != "Let me inspect this.hello world" {
 		t.Fatalf("result=%q final=%q deltas=%q", result.Summary, final, deltas)

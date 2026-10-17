@@ -137,9 +137,9 @@ func (e Executor) Execute(ctx context.Context, execution relay.Execution) (relay
 	if finalMessage == "" {
 		return relay.Result{}, fmt.Errorf("relay claude: stream completed without a final message")
 	}
-	artifacts, err := run.Artifacts("claude", finalMessage)
+	artifacts, err := run.Artifacts(finalMessage)
 	if err != nil {
-		return relay.Result{}, fmt.Errorf("relay claude: write final message: %w", err)
+		return relay.Result{}, fmt.Errorf("relay claude: collect artifacts: %w", err)
 	}
 	if execution.Emit != nil {
 		execution.Emit(ctx, "assistant.final.completed", map[string]string{"text": finalMessage})

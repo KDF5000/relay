@@ -42,6 +42,9 @@ printf '%s\n' '{"type":"agent_settled","aborted":false}'
 	if result.Summary != "Pi completed the task" || result.RuntimeSessionID != "pi-session" {
 		t.Fatalf("result = %#v", result)
 	}
+	if len(result.Artifacts) != 0 {
+		t.Fatalf("plain answer produced artifacts: %+v", result.Artifacts)
+	}
 	args, err := os.ReadFile(filepath.Join(dir, "run-pi", ".relay", "pi-args.txt"))
 	if err != nil {
 		t.Fatal(err)

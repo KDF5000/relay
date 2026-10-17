@@ -1,8 +1,10 @@
-package codex
+// Package artifacts collects explicitly declared deliverables from a runtime workspace.
+package artifacts
 
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
 	"os"
 	"path/filepath"
@@ -24,7 +26,8 @@ type declaredArtifact struct {
 	ContentType string `json:"content_type,omitempty"`
 }
 
-func resetArtifactManifest(workDir string) error {
+// Reset removes the previous run's manifest before execution begins.
+func Reset(workDir string) error {
 	err := os.Remove(filepath.Join(workDir, artifactManifestPath))
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("reset artifact manifest: %w", err)
@@ -32,12 +35,18 @@ func resetArtifactManifest(workDir string) error {
 	return nil
 }
 
-func collectDeclaredArtifacts(workDir string) ([]relay.Artifact, error) {
+// Collect returns only files declared by this run, never implicit diagnostics.
+func Collect(workDir string) ([]relay.Artifact, error) {
 	manifestFile := filepath.Join(workDir, artifactManifestPath)
-	content, err := os.ReadFile(manifestFile)
+	file, err := os.Open(manifestFile)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, fmt.Errorf("read artifact manifest: %w", err)
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, (256<<10)+1))
 	if err != nil {
 		return nil, fmt.Errorf("read artifact manifest: %w", err)
 	}
@@ -72,6 +81,9 @@ func collectDeclaredArtifacts(workDir string) ([]relay.Artifact, error) {
 		relative, err := filepath.Rel(root, resolved)
 		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
 			return nil, fmt.Errorf("artifact %d path escapes the work directory", index+1)
+		}
+		if relative == ".relay" || strings.HasPrefix(relative, ".relay"+string(os.PathSeparator)) {
+			return nil, fmt.Errorf("artifact %d cannot reference Relay's internal directory", index+1)
 		}
 		info, err := os.Stat(resolved)
 		if err != nil {

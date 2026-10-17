@@ -47,8 +47,8 @@ printf '%s' 'TRAE_RUNTIME_OK' > "$out"
 	if len(events) != 4 || events[1] != "runtime.trae.thread.started" || events[2] != "assistant.final.completed" {
 		t.Fatalf("events=%v", events)
 	}
-	if result.Artifacts[1].Type != "trae_final_message" {
-		t.Fatalf("artifact=%+v", result.Artifacts[1])
+	if len(result.Artifacts) != 0 {
+		t.Fatalf("plain answer produced artifacts: %+v", result.Artifacts)
 	}
 	content, err := os.ReadFile(filepath.Join(dir, "run-trae", "AGENTS.md"))
 	if err != nil || !strings.Contains(string(content), "rules") {

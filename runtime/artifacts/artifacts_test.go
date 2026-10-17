@@ -1,4 +1,4 @@
-package codex
+package artifacts
 
 import (
 	"os"
@@ -19,7 +19,7 @@ func TestCollectDeclaredArtifacts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workDir, artifactManifestPath), []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	artifacts, err := collectDeclaredArtifacts(workDir)
+	artifacts, err := Collect(workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestResetArtifactManifest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workDir, artifactManifestPath), []byte(`{"artifacts":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := resetArtifactManifest(workDir); err != nil {
+	if err := Reset(workDir); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(workDir, artifactManifestPath)); !os.IsNotExist(err) {
@@ -57,7 +57,7 @@ func TestCollectDeclaredArtifactsRejectsEscape(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workDir, artifactManifestPath), []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := collectDeclaredArtifacts(workDir); err == nil {
+	if _, err := Collect(workDir); err == nil {
 		t.Fatal("expected escaping artifact path to fail")
 	}
 }
@@ -74,7 +74,39 @@ func TestCollectDeclaredArtifactsRejectsInternalFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workDir, artifactManifestPath), []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := collectDeclaredArtifacts(workDir); err == nil {
+	if _, err := Collect(workDir); err == nil {
 		t.Fatal("expected internal artifact path to fail")
+	}
+}
+
+func TestCollectRejectsSymlinkToInternalFile(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".relay"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".relay", "internal.txt"), []byte("internal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(".relay", "internal.txt"), filepath.Join(workDir, "report.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, artifactManifestPath), []byte(`{"artifacts":[{"path":"report.txt"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Collect(workDir); err == nil {
+		t.Fatal("expected symlink to internal artifact to fail")
+	}
+}
+
+func TestCollectRejectsOversizedManifest(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".relay"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, artifactManifestPath), []byte(strings.Repeat(" ", (256<<10)+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Collect(workDir); err == nil || !strings.Contains(err.Error(), "exceeds 256 KiB") {
+		t.Fatalf("expected manifest size limit, got %v", err)
 	}
 }

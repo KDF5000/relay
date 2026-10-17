@@ -42,6 +42,9 @@ printf '%s\n' '{"type":"result","is_error":false,"result":"Claude completed the 
 	if result.Summary != "Claude completed the task" || result.RuntimeSessionID != "claude-session" {
 		t.Fatalf("result = %#v", result)
 	}
+	if len(result.Artifacts) != 0 {
+		t.Fatalf("plain answer produced artifacts: %+v", result.Artifacts)
+	}
 	args, err := os.ReadFile(filepath.Join(dir, "run-claude", ".relay", "claude-args.txt"))
 	if err != nil {
 		t.Fatal(err)

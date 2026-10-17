@@ -408,7 +408,7 @@ Thread 丢失、无法恢复或任务迁移到其他 Node 时，Node 使用 Host
 Prompt 新建线程，成功后用新的 Thread ID 原子替换旧映射。通用 Interaction 接口存在并不
 意味着每个 Runtime 已接通原生审批。
 
-Codex-like Runtime 可以在结束前写入 `.relay/artifacts.json`，声明需要独立上传的业务交付
+Codex、Trae、Claude 和 Pi Runtime 可以在结束前写入 `.relay/artifacts.json`，声明需要独立上传的业务交付
 文件。每项包含相对工作目录的 `path`、语义化 `type`，以及可选的 `name` 和
 `content_type`。Node 会在每次执行前清理旧清单，执行后校验文件存在、为普通文件且解析
 后的真实路径仍位于工作目录内，再将它们作为独立 Artifact 上传。`.relay/` 内部文件不可
@@ -423,7 +423,7 @@ model/profile 和 ephemeral 等核心契约。Relay 复用 Codex-like 执行内�
 - Runtime Provider 使用 `trae`；
 - 优先发现 `traex`，找不到时回退 `trae-cli`；
 - 版本输出统一提取为语义版本，例如 `0.202.3`；
-- Event 使用 `runtime.trae.*`，最终回答 Artifact 使用 `trae_final_message`；
+- Event 使用 `runtime.trae.*`，最终回答保存在 Run Summary / Output 和会话事件中；
 - 只额外透传显式允许的 `TRAE_HOME`、`TRAE_API_KEY`、`TRAE_BASE_URL`；
 - 权限策略由 Trae 自身配置，Relay 不再附加 `permission_mode`；
 - 继续使用 Relay 的进程组监管、Workspace、文件 Tool Bridge 和 Artifact 上传链路。

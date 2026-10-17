@@ -38,7 +38,9 @@ func (s *S3BlobStore) key(key string) string {
 	return s.prefix + "/" + key
 }
 func (s *S3BlobStore) Put(ctx context.Context, key string, reader io.Reader) (int64, error) {
-	info, err := s.client.PutObject(ctx, s.bucket, s.key(key), reader, -1, minio.PutObjectOptions{ContentType: "application/octet-stream"})
+	// Unknown-length streams otherwise allocate a 528 MiB part buffer in the SDK.
+	// Keep uploads sequential with an 8 MiB buffer, even for tiny artifacts.
+	info, err := s.client.PutObject(ctx, s.bucket, s.key(key), reader, -1, minio.PutObjectOptions{ContentType: "application/octet-stream", PartSize: 8 << 20, NumThreads: 1})
 	return info.Size, err
 }
 func (s *S3BlobStore) Open(ctx context.Context, key string) (io.ReadCloser, error) {

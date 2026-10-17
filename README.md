@@ -349,7 +349,7 @@ Long-running runtimes can create approval or input interactions, pause, and resu
 - The legacy `exec` protocol remains available for compatible non-interactive CLIs but only produces complete messages.
 - Relay does not override runtime permission policy. Legacy Node `sandbox` and `permission_mode` fields are ignored; configure permissions in Codex, Trae, Claude Code, or Pi itself.
 - Runtime subprocesses receive a restricted environment by default. Add variables explicitly through `pass_env` or `env` in the Node configuration.
-- Codex-like runtimes can declare durable output files by writing `.relay/artifacts.json` in the work directory before they finish. Each entry contains a relative `path`, a semantic `type`, and optional `name` and `content_type`, for example `{"artifacts":[{"path":"report.md","type":"report","content_type":"text/markdown"}]}`. Relay validates that declared files stay inside the workspace and uploads them separately from the runtime's final message.
+- Codex, Trae, Claude, and Pi runtimes can declare durable output files by writing `.relay/artifacts.json` in the work directory before they finish. Each entry contains a relative `path`, a semantic `type`, and optional `name` and `content_type`, for example `{"artifacts":[{"path":"report.md","type":"report","content_type":"text/markdown"}]}`. Relay validates that declared files stay inside the workspace and uploads only those declared deliverables. Final answers remain in the Run summary/output and conversation events; instruction files and final-message files are kept locally for execution/diagnostics and are not uploaded automatically. S3 uploads use a sequential 8 MiB part buffer.
 
 ## Development
 
