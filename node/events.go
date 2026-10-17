@@ -83,3 +83,48 @@ func deliverEvent(ctx context.Context, cp ControlPlane, a controlplane.Assignmen
 		}
 	}
 }
+
+type eventBatchControlPlane interface {
+	AppendEvents(context.Context, string, string, string, []controlplane.ProducerEvent) error
+}
+
+func deliverEvents(ctx context.Context, cp ControlPlane, a controlplane.Assignment, events []controlplane.ProducerEvent) error {
+	batch, ok := cp.(eventBatchControlPlane)
+	if !ok {
+		for _, event := range events {
+			if err := deliverEvent(ctx, cp, a, event.EventID, event.Type, event.Data); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	deliveryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	delay := 100 * time.Millisecond
+	for {
+		err := batch.AppendEvents(deliveryCtx, a.RunID, a.AttemptID, a.LeaseToken, events)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, controlplane.ErrInvalidLease) || errors.Is(err, controlplane.ErrInvalidTransition) || errors.Is(err, controlplane.ErrRunCancelled) || errors.Is(err, controlplane.ErrNotFound) {
+			return err
+		}
+		var httpError interface{ HTTPStatusCode() int }
+		if errors.As(err, &httpError) {
+			switch httpError.HTTPStatusCode() {
+			case 400, 413, 422:
+				return err
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-deliveryCtx.Done():
+			timer.Stop()
+			return fmt.Errorf("event batch delivery deadline: %w", errors.Join(err, deliveryCtx.Err()))
+		case <-timer.C:
+		}
+		if delay < time.Second {
+			delay *= 2
+		}
+	}
+}

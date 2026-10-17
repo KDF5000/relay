@@ -319,6 +319,10 @@ func (c *Client) AppendEvent(ctx context.Context, runID, attemptID, lease, event
 	}
 	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(attemptID)+"/events", map[string]any{"run_id": runID, "lease_token": lease, "type": eventType, "data": data, "event_id": id}, nil)
 }
+
+func (c *Client) AppendEvents(ctx context.Context, runID, attemptID, lease string, events []controlplane.ProducerEvent) error {
+	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(attemptID)+"/events/batch", map[string]any{"run_id": runID, "lease_token": lease, "events": events}, nil)
+}
 func (c *Client) Complete(ctx context.Context, value controlplane.Assignment, result relay.Result) error {
 	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/complete", map[string]any{"assignment": value, "result": result}, nil)
 }

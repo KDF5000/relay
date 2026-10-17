@@ -73,6 +73,7 @@ func NewHandlerWithAuth(service *controlplane.Service, auth Authenticator) *Hand
 	h.mux.HandleFunc("POST /v1/attempts/{attemptID}/start", h.start)
 	h.mux.HandleFunc("POST /v1/attempts/{attemptID}/renew", h.renew)
 	h.mux.HandleFunc("POST /v1/attempts/{attemptID}/events", h.appendEvent)
+	h.mux.HandleFunc("POST /v1/attempts/{attemptID}/events/batch", h.appendEvents)
 	h.mux.HandleFunc("POST /v1/attempts/{attemptID}/artifacts", h.uploadArtifact)
 	h.mux.HandleFunc("POST /v1/attempts/{attemptID}/capability-calls/reserve", h.reserveCapability)
 	h.mux.HandleFunc("POST /v1/attempts/{attemptID}/capability-calls/{callID}/finish", h.finishCapability)
@@ -349,6 +350,18 @@ func (h *Handler) appendEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondEmpty(w, h.service.AppendEvent(r.Context(), value.RunID, r.PathValue("attemptID"), value.LeaseToken, value.Type, value.Data, value.EventID))
+}
+
+func (h *Handler) appendEvents(w http.ResponseWriter, r *http.Request) {
+	var value struct {
+		RunID      string                       `json:"run_id"`
+		LeaseToken string                       `json:"lease_token"`
+		Events     []controlplane.ProducerEvent `json:"events"`
+	}
+	if !decode(w, r, &value) {
+		return
+	}
+	respondEmpty(w, h.service.AppendEvents(r.Context(), value.RunID, r.PathValue("attemptID"), value.LeaseToken, value.Events))
 }
 func (h *Handler) uploadArtifact(w http.ResponseWriter, r *http.Request) {
 	assignment := controlplane.Assignment{RunID: r.URL.Query().Get("run_id"), AttemptID: r.PathValue("attemptID"), LeaseToken: r.Header.Get("X-Relay-Lease-Token")}

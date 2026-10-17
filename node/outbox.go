@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -139,6 +141,17 @@ func (o *Outbox) remove(path string) error {
 	return o.syncDir()
 }
 
+func (o *Outbox) removeBatch(paths []string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	return o.syncDir()
+}
+
 func (o *Outbox) deliver(ctx context.Context, cp ControlPlane, a controlplane.Assignment, id, kind string, data any) error {
 	payload, err := json.Marshal(data)
 	if err != nil {
@@ -168,6 +181,12 @@ func (o *Outbox) Recover(ctx context.Context, cp ControlPlane, report func(strin
 	if err != nil {
 		return err
 	}
+	type recoveredEvent struct {
+		record pendingEvent
+		path   string
+	}
+	groups := make(map[string][]recoveredEvent)
+	var order []string
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -195,7 +214,37 @@ func (o *Outbox) Recover(ctx context.Context, cp ControlPlane, report func(strin
 		if a.RunID == "" || a.AttemptID == "" || a.LeaseToken == "" || record.ID == "" || record.Type == "" {
 			return fmt.Errorf("incomplete outbox record %s", entry.Name())
 		}
-		err = deliverEvent(ctx, cp, a, record.ID, record.Type, record.Data)
+		key := a.AttemptID + "\x00" + a.LeaseToken
+		if _, ok := groups[key]; !ok {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], recoveredEvent{record: record, path: path})
+	}
+	for _, key := range order {
+		group := groups[key]
+		sort.Slice(group, func(i, j int) bool {
+			left, leftErr := strconv.Atoi(group[i].record.ID)
+			right, rightErr := strconv.Atoi(group[j].record.ID)
+			if leftErr == nil && rightErr == nil {
+				return left < right
+			}
+			return group[i].record.ID < group[j].record.ID
+		})
+		a := group[0].record.Assignment
+		for offset := 0; offset < len(group); offset += controlplane.MaxProducerEventBatch {
+			end := offset + controlplane.MaxProducerEventBatch
+			if end > len(group) {
+				end = len(group)
+			}
+			events := make([]controlplane.ProducerEvent, 0, end-offset)
+			for _, item := range group[offset:end] {
+				events = append(events, controlplane.ProducerEvent{EventID: item.record.ID, Type: item.record.Type, Data: item.record.Data})
+			}
+			err = deliverEvents(ctx, cp, a, events)
+			if err != nil {
+				break
+			}
+		}
 		reason := "replayed; runtime was interrupted"
 		if err == nil {
 			err = cp.Fail(ctx, a, "Node restarted: pending events recovered, runtime execution was interrupted")
@@ -208,7 +257,11 @@ func (o *Outbox) Recover(ctx context.Context, cp ControlPlane, report func(strin
 		if err != nil && !staleEvent(err) {
 			return err
 		}
-		if err := o.remove(path); err != nil {
+		paths := make([]string, 0, len(group))
+		for _, item := range group {
+			paths = append(paths, item.path)
+		}
+		if err := o.removeBatch(paths); err != nil {
 			return err
 		}
 		if report != nil {

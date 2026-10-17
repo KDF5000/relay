@@ -264,27 +264,8 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 	if w.Bindings != nil {
 		provider = w.Bindings
 	}
-	// One in-flight event provides bounded buffering and backpressure. Keep its
-	// identity and immutable payload until acknowledged, including lost responses.
-	var eventMu sync.Mutex
-	var eventErr error
-	eventSequence := 0
-	emit := func(eventCtx context.Context, eventType string, data any) {
-		eventMu.Lock()
-		defer eventMu.Unlock()
-		if eventErr != nil {
-			return
-		}
-		eventSequence++
-		deliver := deliverEvent
-		if w.Outbox != nil {
-			deliver = w.Outbox.deliver
-		}
-		if err := deliver(eventCtx, w.ControlPlane, assignment, fmt.Sprint(eventSequence), eventType, data); err != nil {
-			eventErr = fmt.Errorf("relay node: deliver event %s: %w", eventType, err)
-			cancelExecution()
-		}
-	}
+	events := newEventBatcher(executionCtx, w.ControlPlane, assignment, w.Outbox, cancelExecution)
+	emit := events.Emit
 	if workDir != "" {
 		emit(ctx, "workspace.prepared", map[string]any{
 			"kind":     assignment.Request.Workspace.Kind,
@@ -312,9 +293,7 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 		Interactions:     interactionBroker{controlPlane: w.ControlPlane, assignment: assignment},
 		Emit:             emit,
 	})
-	eventMu.Lock()
-	executionErr = errors.Join(executionErr, eventErr)
-	eventMu.Unlock()
+	executionErr = errors.Join(executionErr, events.Close())
 	stopLease := func() error {
 		stopKeeper()
 		return <-keeperDone

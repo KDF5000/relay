@@ -40,6 +40,7 @@ type Storage interface {
 	AcknowledgeCancellation(context.Context, Assignment) error
 	Start(context.Context, Assignment) error
 	AppendEvent(context.Context, string, string, string, string, any, ...string) error
+	AppendEvents(context.Context, string, string, string, []ProducerEvent) error
 	Complete(context.Context, Assignment, relay.Result) error
 	Fail(context.Context, Assignment, string) error
 	GetRun(context.Context, string) (relay.Run, error)
@@ -241,6 +242,25 @@ func (s *Service) AppendEvent(ctx context.Context, runID, attemptID, lease, even
 		return err
 	}
 	err := s.storage.AppendEvent(ctx, runID, attemptID, lease, eventType, data, eventIDs...)
+	if err == nil {
+		s.notifyRun(runID)
+	}
+	return err
+}
+
+func (s *Service) AppendEvents(ctx context.Context, runID, attemptID, lease string, events []ProducerEvent) error {
+	if err := s.authorizeNodeRun(ctx, runID); err != nil {
+		return err
+	}
+	if len(events) == 0 || len(events) > MaxProducerEventBatch {
+		return fmt.Errorf("producer event batch must contain 1 to %d events", MaxProducerEventBatch)
+	}
+	for _, event := range events {
+		if event.EventID == "" || event.Type == "" {
+			return errors.New("producer event ID and type are required")
+		}
+	}
+	err := s.storage.AppendEvents(ctx, runID, attemptID, lease, events)
 	if err == nil {
 		s.notifyRun(runID)
 	}

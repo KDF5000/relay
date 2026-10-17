@@ -4,7 +4,7 @@ import "fmt"
 
 // ProtocolVersion changes only when the Server/Node wire contract is no longer
 // compatible. Version is injected into release binaries at build time.
-const ProtocolVersion = "2"
+const ProtocolVersion = "3"
 
 var Version = "dev"
 

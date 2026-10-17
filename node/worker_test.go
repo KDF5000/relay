@@ -32,6 +32,11 @@ type failingEvents struct {
 	cause error
 }
 
+type terminalEventError struct{ message string }
+
+func (e *terminalEventError) Error() string       { return e.message }
+func (e *terminalEventError) HTTPStatusCode() int { return 400 }
+
 type lostEventResponse struct {
 	node.ControlPlane
 	calls int
@@ -296,14 +301,16 @@ func (f failingEvents) AppendEvent(context.Context, string, string, string, stri
 func TestEventDeliveryFailureCannotCompleteRun(t *testing.T) {
 	ctx := context.Background()
 	service := controlplane.New(time.Second)
-	cause := errors.New("event connection interrupted")
+	cause := &terminalEventError{message: "event rejected"}
 	worker := &node.Worker{
 		Registration: controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "event-node", Runtimes: []controlplane.Runtime{{Provider: "test"}}, Capacity: 1},
 		ControlPlane: failingEvents{ControlPlane: service, cause: cause},
 		Executors: node.ExecutorMap{"test": relay.ExecutorFunc(func(ctx context.Context, execution relay.Execution) (relay.Result, error) {
 			execution.Emit(ctx, "assistant.message.delta", map[string]string{"delta": "hello"})
-			if ctx.Err() == nil {
-				t.Error("failed delivery must cancel runtime execution")
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Second):
+				t.Error("failed delivery did not cancel runtime execution")
 			}
 			// Even an adapter that returns success after cancellation cannot hide
 			// the delivery failure from the host.

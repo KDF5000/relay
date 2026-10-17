@@ -8,6 +8,16 @@ import (
 	"fmt"
 )
 
+const MaxProducerEventBatch = 64
+
+// ProducerEvent is an immutable runtime event submitted by a fenced Node
+// attempt. EventID makes retries safe when a response is lost.
+type ProducerEvent struct {
+	EventID string          `json:"event_id"`
+	Type    string          `json:"type"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
 // EventIdentity scopes producer identities to one fenced attempt.
 func EventIdentity(attempt, lease string, ids []string) string {
 	if len(ids) == 0 || ids[0] == "" {

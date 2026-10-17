@@ -54,7 +54,7 @@ printf '%s\n' '{"type":"agent_settled","aborted":false}'
 			t.Fatalf("args %q do not contain %q", args, expected)
 		}
 	}
-	if !contains(events, "assistant.message.delta") || !contains(events, "runtime.pi.completed") {
+	if !contains(events, "assistant.message.delta") || !contains(events, "runtime.pi.completed") || contains(events, "runtime.pi.message_update") {
 		t.Fatalf("events = %#v", events)
 	}
 	content, err := os.ReadFile(filepath.Join(dir, "run-pi", "AGENTS.md"))

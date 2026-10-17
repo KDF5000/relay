@@ -540,6 +540,42 @@ func (s *Store) AppendEvent(ctx context.Context, runID, attemptID, lease, eventT
 	})
 }
 
+func (s *Store) AppendEvents(ctx context.Context, runID, attemptID, lease string, events []controlplane.ProducerEvent) error {
+	encoded := make([][]byte, len(events))
+	for index, event := range events {
+		value, err := marshalEventData(event.Data)
+		if err != nil {
+			return err
+		}
+		encoded[index] = value
+	}
+	assignment := controlplane.Assignment{RunID: runID, AttemptID: attemptID, LeaseToken: lease}
+	return s.transition(ctx, assignment, func(tx pgx.Tx, run relay.Run) error {
+		if run.Attempt.Status != relay.AttemptRunning {
+			return controlplane.ErrInvalidTransition
+		}
+		for index, event := range events {
+			id := controlplane.EventIdentity(attemptID, lease, []string{event.EventID})
+			var oldType string
+			var oldData []byte
+			err := tx.QueryRow(ctx, `SELECT type, data FROM relay_events WHERE id=$1`, id).Scan(&oldType, &oldData)
+			if err == nil {
+				if err := controlplane.SameEvent(oldType, oldData, event.Type, json.RawMessage(encoded[index])); err != nil {
+					return err
+				}
+				continue
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if _, err = tx.Exec(ctx, `INSERT INTO relay_events (id,run_id,attempt_id,sequence,type,data,created_at) SELECT $1,$2,$3,COALESCE(MAX(sequence),0)+1,$4,$5,now() FROM relay_events WHERE run_id=$2`, id, runID, attemptID, event.Type, encoded[index]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) Complete(ctx context.Context, assignment controlplane.Assignment, result relay.Result) error {
 	return s.transition(ctx, assignment, func(tx pgx.Tx, run relay.Run) error {
 		if run.Status == relay.RunSucceeded && run.Attempt.Status == relay.AttemptSucceeded {

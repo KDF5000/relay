@@ -89,16 +89,21 @@ func (e Executor) Execute(ctx context.Context, execution relay.Execution) (relay
 		if typeName == "session" {
 			sessionID, _ = event["id"].(string)
 		}
-		if execution.Emit != nil {
-			execution.Emit(ctx, "runtime.pi."+typeName, event)
-		}
+		emittedStandardDelta := false
 		if typeName == "message_update" {
 			update, _ := event["assistantMessageEvent"].(map[string]any)
 			if update["type"] == "text_delta" {
 				if delta, _ := update["delta"].(string); delta != "" && execution.Emit != nil {
 					execution.Emit(ctx, "assistant.message.delta", map[string]string{"delta": delta})
+					emittedStandardDelta = true
 				}
 			}
+		}
+		// A text delta is already represented by the provider-neutral event.
+		// Avoid persisting and transporting the same token twice; retain all
+		// other raw Pi events for diagnostics and status views.
+		if execution.Emit != nil && !emittedStandardDelta {
+			execution.Emit(ctx, "runtime.pi."+typeName, event)
 		}
 		if typeName == "message_end" {
 			if text, assistant, failed := piMessageText(event["message"]); assistant {

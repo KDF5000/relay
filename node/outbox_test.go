@@ -129,6 +129,44 @@ func TestOutboxSurvivesKilledProcess(t *testing.T) {
 	}
 }
 
+func TestOutboxRecoveryReplaysPendingBatchInSequence(t *testing.T) {
+	cp, assignment := assigned(t)
+	outbox, err := OpenOutbox(t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	for _, item := range []struct {
+		id    string
+		delta string
+	}{{"3", "three"}, {"1", "one"}, {"2", "two"}} {
+		if _, err := outbox.save(assignment, item.id, "assistant.message.delta", map[string]string{"delta": item.delta}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := outbox.Recover(context.Background(), cp, nil); err != nil {
+		t.Fatal(err)
+	}
+	events, err := cp.Events(context.Background(), assignment.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deltas []string
+	for _, event := range events {
+		if event.Type != "assistant.message.delta" {
+			continue
+		}
+		var data map[string]string
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		deltas = append(deltas, data["delta"])
+	}
+	if strings.Join(deltas, ",") != "one,two,three" {
+		t.Fatalf("replayed deltas=%v", deltas)
+	}
+}
+
 type unavailableOutbox struct{ ControlPlane }
 
 func (unavailableOutbox) AppendEvent(context.Context, string, string, string, string, any, ...string) error {

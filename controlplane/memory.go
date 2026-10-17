@@ -299,6 +299,47 @@ func (s *MemoryStorage) AppendEvent(_ context.Context, runID, attemptID, lease, 
 	return nil
 }
 
+func (s *MemoryStorage) AppendEvents(_ context.Context, runID, attemptID, lease string, events []ProducerEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, err := s.authorize(runID, attemptID, lease)
+	if err != nil {
+		return err
+	}
+	if run.Attempt.Status != relay.AttemptRunning {
+		return ErrInvalidTransition
+	}
+	type knownEvent struct {
+		typeName string
+		data     json.RawMessage
+	}
+	known := make(map[string]knownEvent, len(s.events[runID])+len(events))
+	for _, event := range s.events[runID] {
+		known[event.ID] = knownEvent{typeName: event.Type, data: event.Data}
+	}
+	pending := make([]ProducerEvent, 0, len(events))
+	for _, event := range events {
+		id := EventIdentity(attemptID, lease, []string{event.EventID})
+		if existing, ok := known[id]; ok {
+			if err := SameEvent(existing.typeName, existing.data, event.Type, event.Data); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := json.Marshal(event.Data); err != nil {
+			return err
+		}
+		known[id] = knownEvent{typeName: event.Type, data: event.Data}
+		pending = append(pending, event)
+	}
+	for _, event := range pending {
+		id := EventIdentity(attemptID, lease, []string{event.EventID})
+		s.appendEvent(run, event.Type, event.Data)
+		s.events[runID][len(s.events[runID])-1].ID = id
+	}
+	return nil
+}
+
 func (s *MemoryStorage) Complete(_ context.Context, assignment Assignment, result relay.Result) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
