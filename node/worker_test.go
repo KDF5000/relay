@@ -208,8 +208,10 @@ func TestWorkerUsesContinuationPromptForPersistedRuntimeSession(t *testing.T) {
 
 func TestWorkerRenewsLeaseThroughArtifactUpload(t *testing.T) {
 	ctx := context.Background()
-	service := controlplane.New(30 * time.Millisecond)
-	cp := &slowArtifactControlPlane{ControlPlane: service, delay: 120 * time.Millisecond}
+	// Allow scheduler jitter while still requiring renewals throughout an upload
+	// lasting four lease periods. A 30 ms lease was unreliable under build load.
+	service := controlplane.New(500 * time.Millisecond)
+	cp := &slowArtifactControlPlane{ControlPlane: service, delay: 2 * time.Second}
 	artifactPath := t.TempDir() + "/result.txt"
 	if err := os.WriteFile(artifactPath, []byte("result"), 0o600); err != nil {
 		t.Fatal(err)
