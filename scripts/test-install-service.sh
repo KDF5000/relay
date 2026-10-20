@@ -50,7 +50,7 @@ done
 cp "$FAKE_RELEASE_DIR/$(basename "$url")" "$output"
 EOF
 
-for runtime_binary in codex traex claude pi opencode; do
+for runtime_binary in codex traex claude pi opencode qodercli qoderclicn; do
   printf '#!/bin/sh\nexit 0\n' >"$fake_bin/$runtime_binary"
 done
 
@@ -64,7 +64,7 @@ cat >"$fake_bin/launchctl" <<'EOF'
 printf '%s\n' "$*" >>"$FAKE_SERVICE_LOG"
 EOF
 
-chmod 755 "$fake_bin/uname" "$fake_bin/curl" "$fake_bin/codex" "$fake_bin/traex" "$fake_bin/claude" "$fake_bin/pi" "$fake_bin/opencode" "$fake_bin/systemctl" "$fake_bin/launchctl"
+chmod 755 "$fake_bin/uname" "$fake_bin/curl" "$fake_bin/codex" "$fake_bin/traex" "$fake_bin/claude" "$fake_bin/pi" "$fake_bin/opencode" "$fake_bin/qodercli" "$fake_bin/qoderclicn" "$fake_bin/systemctl" "$fake_bin/launchctl"
 
 run_installer() {
   os_name=$1
@@ -129,8 +129,8 @@ HOME="$all_home" \
   RELAY_DOWNLOAD_BASE_URL="https://example.invalid/release" \
   sh "$repository_root/install.sh" --runtime all
 all_config="$all_home/.config/relay/node.json"
-python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert len(c["runtimes"]) == 5' "$all_config"
-for provider in codex trae claude pi opencode; do
+python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert len(c["runtimes"]) == 7' "$all_config"
+for provider in codex trae claude pi opencode qoder qwenwork; do
   grep -F "\"provider\": \"$provider\"" "$all_config" >/dev/null
 done
 
@@ -145,7 +145,23 @@ for choice in opencode auto; do
     FAKE_RELEASE_DIR="$release_dir" \
     RELAY_DOWNLOAD_BASE_URL="https://example.invalid/release" \
     sh "$repository_root/install.sh" --runtime "$choice"
-  python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); p=[r["provider"] for r in c["runtimes"]]; assert "opencode" in p; assert len(p) == (1 if sys.argv[2] == "opencode" else 5)' "$runtime_home/.config/relay/node.json" "$choice"
+  python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); p=[r["provider"] for r in c["runtimes"]]; assert "opencode" in p; assert len(p) == (1 if sys.argv[2] == "opencode" else 7)' "$runtime_home/.config/relay/node.json" "$choice"
 done
+
+# QwenWork ships qoderclicn inside its app bundle rather than on PATH.
+bundled_home="$test_root/home-bundled"
+bundled_bin="$test_root/bundled-bin"
+mkdir -p "$bundled_home/Applications/QwenWorkCN.app/Contents/Resources/bin" "$bundled_bin"
+cp "$fake_bin/uname" "$fake_bin/curl" "$bundled_bin/"
+cp "$fake_bin/qoderclicn" "$bundled_home/Applications/QwenWorkCN.app/Contents/Resources/bin/qoderclicn"
+HOME="$bundled_home" \
+  XDG_CONFIG_HOME="$bundled_home/.config" \
+  XDG_CACHE_HOME="$bundled_home/.cache" \
+  PATH="$bundled_bin:/usr/bin:/bin" \
+  FAKE_OS=Darwin \
+  FAKE_RELEASE_DIR="$release_dir" \
+  RELAY_DOWNLOAD_BASE_URL="https://example.invalid/release" \
+  sh "$repository_root/install.sh" --runtime qwenwork
+python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["runtimes"]; assert [x["provider"] for x in r] == ["qwenwork"]; assert r[0]["command"].endswith("QwenWorkCN.app/Contents/Resources/bin/qoderclicn"), r' "$bundled_home/.config/relay/node.json"
 
 printf 'install service tests passed\n'

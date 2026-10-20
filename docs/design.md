@@ -20,7 +20,7 @@ Server / Node。Web Playground 只是验证接口的参考应用，不定义核�
 Relay 负责：
 
 - 管理执行机器；
-- 管理 Codex、Trae、Claude Code、Pi、OpenCode 和自定义 Runtime；
+- 管理 Codex、Trae、Claude Code、Pi、OpenCode、Qoder、千问办公和自定义 Runtime；
 - 调度、并发、Lease、取消和重试；
 - 工作目录和指令生成；
 - Agent 进程监管；
@@ -408,7 +408,7 @@ Thread 丢失、无法恢复或任务迁移到其他 Node 时，Node 使用 Host
 Prompt 新建线程，成功后用新的 Thread ID 原子替换旧映射。通用 Interaction 接口存在并不
 意味着每个 Runtime 已接通原生审批。
 
-Codex、Trae、Claude、Pi 和 OpenCode Runtime 可以在结束前写入 `.relay/artifacts.json`，声明需要独立上传的业务交付
+Codex、Trae、Claude、Pi、OpenCode、Qoder 和千问办公 Runtime 可以在结束前写入 `.relay/artifacts.json`，声明需要独立上传的业务交付
 文件。每项包含相对工作目录的 `path`、语义化 `type`，以及可选的 `name` 和
 `content_type`。Node 会在每次执行前清理旧清单，执行后校验文件存在、为普通文件且解析
 后的真实路径仍位于工作目录内，再将它们作为独立 Artifact 上传。`.relay/` 内部文件不可
@@ -460,6 +460,29 @@ v2 会先检查会话是否存在，丢失时使用 Host recovery prompt 重建�
 
 继续复用 `AGENTS.md`、图片附件、受限环境、声明式 Artifact 和进程监管。
 工具权限由 OpenCode 配置，`allowed_tools` / `disallowed_tools` 会明确报错。
+
+### 10.5 Qoder / 千问办公
+
+Qoder CLI（`qodercli`）与千问办公内置引擎（Qoder CLI CN，`qoderclicn`）协议一致，由
+同一个 Adapter 的两个 Variant 支持：provider / kind 分别为 `qoder` 和 `qwenwork`，事件
+前缀为 `runtime.qoder.*` / `runtime.qwenwork.*`。未配置 `command` 时先查 `PATH`，
+再查 macOS 应用包内的 `QoderWork.app` / `QwenWorkCN.app`。
+
+Adapter 使用 `--print --output-format stream-json`，Prompt 走 stdin。`assistant` 事件中的
+text block 映射为 `assistant.message.completed`，thinking block 不输出；`result` 事件给出
+最终回答与 `session_id`，`is_error` 视为失败。用户 Hook 产生的 `system/hook_*` 事件只是
+本地诊断，不转发。`--resume` 续接原生会话，CLI 报会话无效时用 Host recovery prompt
+重建；`ephemeral` 使用 `--no-session-persistence`。图片用 `--attachment` 传入；模型通过
+`--list-models` 发现，自定义模型以 `mode-…` ID 寻址。
+
+两个 Variant 各自使用独立账号和配置目录（`QODER_CONFIG_DIR` / `QODERCN_CONFIG_DIR`），
+需要 Node 用户执行 `login` 或传入 `QODER_PERSONAL_ACCESS_TOKEN`；未登录错误会附带登录
+提示。版本和模型探测会剥离 `QODER_AGENT_SDK_*` 变量，避免 Node 从 Qoder 托管的 Shell
+启动时 CLI 拒绝独立运行。
+
+无头模式无法回答权限确认，且 `--allowed-tools` 不会预先授权，所以 Adapter 拒绝
+`allowed_tools` / `disallowed_tools`，权限策略由 Qoder 设置或 `args` 中的
+`--permission-mode` 决定。
 
 ## 11. 指令模型
 
@@ -520,6 +543,7 @@ relay/
 ├── runtime/claude/           Claude Code headless Adapter
 ├── runtime/pi/               Pi JSON mode Adapter
 ├── runtime/opencode/         OpenCode JSON mode Adapter
+├── runtime/qoder/            Qoder / 千问办公 stream-json Adapter
 ├── sdk/                      业务项目 SDK
 ├── transport/httpapi/        当前 Host/Node 网络协议
 ├── cmd/relay-server/         Control Plane 进程
