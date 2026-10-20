@@ -117,7 +117,7 @@ func MaterializeInstructions(workDir, provider string, compiled CompiledInstruct
 
 func instructionFileName(provider string) (string, error) {
 	switch strings.ToLower(provider) {
-	case "codex", "trae", "traex", "copilot", "cursor", "opencode", "hermes", "pi", "mock":
+	case "codex", "trae", "traex", "copilot", "cursor", "opencode", "hermes", "pi", "qoder", "qwenwork", "mock":
 		return "AGENTS.md", nil
 	case "claude":
 		return "CLAUDE.md", nil

@@ -33,7 +33,8 @@ Options:
   --node-id ID       Stable Node identity (default: generated UUID)
   --node-name NAME   Human-readable machine name (default: hostname)
   --capacity N       Maximum concurrent runs (default: 2)
-  --runtime VALUE    auto, codex, trae, claude, pi, opencode, both, or all (default: auto)
+  --runtime VALUE    auto, codex, trae, claude, pi, opencode, qoder,
+                     qwenwork, both, or all (default: auto)
   --token TOKEN      Node authentication token
   --version VERSION  Release tag such as v0.2.0 (default: latest)
   --install-dir DIR  Binary directory (default: ~/.local/bin)
@@ -88,8 +89,8 @@ esac
 [ "$capacity" -le 32 ] || fail "--capacity must not exceed 32"
 
 case "$runtime_choice" in
-  auto|codex|trae|claude|pi|opencode|both|all) ;;
-  *) fail "--runtime must be auto, codex, trae, claude, pi, opencode, both, or all" ;;
+  auto|codex|trae|claude|pi|opencode|qoder|qwenwork|both|all) ;;
+  *) fail "--runtime must be auto, codex, trae, claude, pi, opencode, qoder, qwenwork, both, or all" ;;
 esac
 
 command -v curl >/dev/null 2>&1 || fail "curl is required"
@@ -163,18 +164,36 @@ find_command() {
   command -v "$1" 2>/dev/null || true
 }
 
+# Desktop apps bundle their CLI without adding it to PATH.
+find_bundled_command() {
+  found=$(find_command "$1")
+  if [ -z "$found" ]; then
+    for candidate in "/Applications/$2/Contents/Resources/bin/$1" "$HOME/Applications/$2/Contents/Resources/bin/$1"; do
+      if [ -x "$candidate" ]; then
+        found=$candidate
+        break
+      fi
+    done
+  fi
+  printf '%s' "$found"
+}
+
 codex_command=$(find_command codex)
 trae_command=$(find_command traex)
 [ -n "$trae_command" ] || trae_command=$(find_command trae-cli)
 claude_command=$(find_command claude)
 pi_command=$(find_command pi)
 opencode_command=$(find_command opencode)
+qoder_command=$(find_bundled_command qodercli QoderWork.app)
+qwenwork_command=$(find_bundled_command qoderclicn QwenWorkCN.app)
 
 include_codex=0
 include_trae=0
 include_claude=0
 include_pi=0
 include_opencode=0
+include_qoder=0
+include_qwenwork=0
 case "$runtime_choice" in
   auto)
     [ -n "$codex_command" ] && include_codex=1
@@ -182,14 +201,18 @@ case "$runtime_choice" in
     [ -n "$claude_command" ] && include_claude=1
     [ -n "$pi_command" ] && include_pi=1
     [ -n "$opencode_command" ] && include_opencode=1
+    [ -n "$qoder_command" ] && include_qoder=1
+    [ -n "$qwenwork_command" ] && include_qwenwork=1
     ;;
   codex) include_codex=1 ;;
   trae) include_trae=1 ;;
   claude) include_claude=1 ;;
   pi) include_pi=1 ;;
   opencode) include_opencode=1 ;;
+  qoder) include_qoder=1 ;;
+  qwenwork) include_qwenwork=1 ;;
   both) include_codex=1; include_trae=1 ;;
-  all) include_codex=1; include_trae=1; include_claude=1; include_pi=1; include_opencode=1 ;;
+  all) include_codex=1; include_trae=1; include_claude=1; include_pi=1; include_opencode=1; include_qoder=1; include_qwenwork=1 ;;
 esac
 
 [ "$include_codex" -eq 0 ] || [ -n "$codex_command" ] || fail "Codex CLI was not found in PATH"
@@ -197,7 +220,9 @@ esac
 [ "$include_claude" -eq 0 ] || [ -n "$claude_command" ] || fail "Claude Code CLI was not found in PATH"
 [ "$include_pi" -eq 0 ] || [ -n "$pi_command" ] || fail "Pi CLI was not found in PATH"
 [ "$include_opencode" -eq 0 ] || [ -n "$opencode_command" ] || fail "OpenCode CLI was not found in PATH"
-[ "$include_codex" -eq 1 ] || [ "$include_trae" -eq 1 ] || [ "$include_claude" -eq 1 ] || [ "$include_pi" -eq 1 ] || [ "$include_opencode" -eq 1 ] || fail "no supported Runtime found; install Codex, Trae, Claude Code, Pi, or OpenCode, or pass --runtime"
+[ "$include_qoder" -eq 0 ] || [ -n "$qoder_command" ] || fail "Qoder CLI (qodercli) was not found in PATH or QoderWork.app"
+[ "$include_qwenwork" -eq 0 ] || [ -n "$qwenwork_command" ] || fail "QwenWork CLI (qoderclicn) was not found in PATH or QwenWorkCN.app"
+[ "$include_codex" -eq 1 ] || [ "$include_trae" -eq 1 ] || [ "$include_claude" -eq 1 ] || [ "$include_pi" -eq 1 ] || [ "$include_opencode" -eq 1 ] || [ "$include_qoder" -eq 1 ] || [ "$include_qwenwork" -eq 1 ] || fail "no supported Runtime found; install Codex, Trae, Claude Code, Pi, OpenCode, Qoder, or QwenWork, or pass --runtime"
 
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -390,6 +415,18 @@ else
     escaped_command=$(json_escape "$opencode_command")
     runtime_json="${runtime_json}${separator}
     {\"id\": \"${escaped_node}/opencode\", \"kind\": \"opencode\", \"provider\": \"opencode\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+    separator=","
+  fi
+  if [ "$include_qoder" -eq 1 ]; then
+    escaped_command=$(json_escape "$qoder_command")
+    runtime_json="${runtime_json}${separator}
+    {\"id\": \"${escaped_node}/qoder\", \"kind\": \"qoder\", \"provider\": \"qoder\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+    separator=","
+  fi
+  if [ "$include_qwenwork" -eq 1 ]; then
+    escaped_command=$(json_escape "$qwenwork_command")
+    runtime_json="${runtime_json}${separator}
+    {\"id\": \"${escaped_node}/qwenwork\", \"kind\": \"qwenwork\", \"provider\": \"qwenwork\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
   fi
 
   token_line=""

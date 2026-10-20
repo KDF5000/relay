@@ -30,7 +30,7 @@ func TestProbeRuntimeSupportsNativeAgentCLIs(t *testing.T) {
 	dir := t.TempDir()
 	for _, test := range []struct {
 		name, version string
-	}{{"claude", "2.1.30"}, {"pi", "0.55.1"}, {"opencode", "2.0.32"}} {
+	}{{"claude", "2.1.30"}, {"pi", "0.55.1"}, {"opencode", "2.0.32"}, {"qoder", "1.1.26"}, {"qwenwork", "1.1.71"}} {
 		command := filepath.Join(dir, test.name)
 		if err := os.WriteFile(command, []byte("#!/bin/sh\necho '"+test.name+" "+test.version+"'\n"), 0o755); err != nil {
 			t.Fatal(err)
@@ -85,5 +85,32 @@ func TestDiscoverOpenCodeModelsAdvertisedAtRegistration(t *testing.T) {
 	got := probeRuntime(item)
 	if !isOpenCode(item) || got.State != "healthy" || got.Version != "2.0.32" || len(got.ModelCatalog) != 2 || got.DefaultModel != "provider/model-b" {
 		t.Fatalf("OpenCode registration = %+v", got)
+	}
+}
+
+func TestQoderVariantsAdvertisedAtRegistration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	for _, test := range []struct{ kind, provider, binary string }{
+		{"qoder", "qoder", "qodercli"},
+		{"", "qwenwork", "qoderclicn"},
+		{"qoderclicn", "qwenwork-team", "qoderclicn"},
+	} {
+		command := filepath.Join(t.TempDir(), test.binary)
+		script := "#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo '1.1.71'; exit 0; fi\nprintf '%s\\n' MODEL Auto Qwen3.8-Max 'Team (mode-1)'\n"
+		if err := os.WriteFile(command, []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		item := runtimeConfig{Kind: test.kind, Provider: test.provider, Command: command}
+		variant, ok := qoderVariant(item)
+		if !ok || variant.Binary != test.binary {
+			t.Fatalf("%s/%s variant = %+v", test.kind, test.provider, variant)
+		}
+		discoverRuntimeModels(&item, variant.Provider)
+		got := probeRuntime(item)
+		if got.State != "healthy" || got.Version != "1.1.71" || len(got.ModelCatalog) != 3 || got.DefaultModel != "Auto" || got.Models[2] != "mode-1" {
+			t.Fatalf("%s registration = %+v", test.provider, got)
+		}
 	}
 }

@@ -58,6 +58,27 @@
       "tool_dir": "./bin",
       "work_root": "/tmp/relay-runs",
       "ephemeral": false
+    },
+    {
+      "id": "developer-macbook/qoder",
+      "kind": "qoder",
+      "provider": "qoder",
+      "command": "qodercli",
+      "args": ["--permission-mode", "accept_edits"],
+      "tool_dir": "./bin",
+      "work_root": "/tmp/relay-runs",
+      "ephemeral": false
+    },
+    {
+      "id": "developer-macbook/qwenwork",
+      "kind": "qwenwork",
+      "provider": "qwenwork",
+      "command": "/Applications/QwenWorkCN.app/Contents/Resources/bin/qoderclicn",
+      "args": ["--permission-mode", "accept_edits"],
+      "pass_env": ["QODER_PERSONAL_ACCESS_TOKEN"],
+      "tool_dir": "./bin",
+      "work_root": "/tmp/relay-runs",
+      "ephemeral": false
     }
   ],
   "bindings": [

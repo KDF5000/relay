@@ -25,6 +25,7 @@ import (
 	runtimecommand "github.com/KDF5000/relay/runtime/command"
 	runtimeopencode "github.com/KDF5000/relay/runtime/opencode"
 	runtimepi "github.com/KDF5000/relay/runtime/pi"
+	runtimeqoder "github.com/KDF5000/relay/runtime/qoder"
 	runtimetrae "github.com/KDF5000/relay/runtime/trae"
 	"github.com/KDF5000/relay/transport/httpapi"
 	"github.com/KDF5000/relay/workspace"
@@ -179,6 +180,17 @@ func main() {
 			}
 			discoverRuntimeModels(item, "opencode")
 			executors[item.Provider] = runtimeopencode.Executor{Config: agentConfig(*item)}
+		} else if variant, ok := qoderVariant(*item); ok {
+			if item.Command == "" {
+				item.Command = runtimeqoder.ResolveBinary(variant, "")
+			}
+			if item.Version == "" {
+				if detected, probeErr := runtimeqoder.ProbeVersion(context.Background(), item.Command); probeErr == nil {
+					item.Version = detected
+				}
+			}
+			discoverRuntimeModels(item, variant.Provider)
+			executors[item.Provider] = runtimeqoder.Executor{Config: agentConfig(*item), Variant: variant}
 		} else {
 			executors[item.Provider] = runtimecommand.Executor{Command: item.Command, Args: item.Args, Env: item.Env, InheritEnv: item.InheritEnv}
 		}
@@ -367,6 +379,16 @@ func probeRuntime(item runtimeConfig) controlplane.Runtime {
 		}
 		return result
 	}
+	if variant, ok := qoderVariant(item); ok {
+		version, err := runtimeqoder.ProbeVersion(context.Background(), runtimeqoder.ResolveBinary(variant, item.Command))
+		if err != nil {
+			result.State = "unhealthy"
+			result.Message = err.Error()
+		} else {
+			result.Version = version
+		}
+		return result
+	}
 	if _, err := exec.LookPath(item.Command); err != nil {
 		result.State = "unhealthy"
 		result.Message = err.Error()
@@ -383,6 +405,10 @@ func discoverRuntimeModels(item *runtimeConfig, kind string) {
 	)
 	if kind == "opencode" {
 		models, err = runtimeopencode.ProbeModels(ctx, agentConfig(*item))
+	} else if kind == "qoder" {
+		models, err = runtimeqoder.ProbeModels(ctx, agentConfig(*item), runtimeqoder.Qoder)
+	} else if kind == "qwenwork" {
+		models, err = runtimeqoder.ProbeModels(ctx, agentConfig(*item), runtimeqoder.QwenWork)
 	} else if kind == "pi" {
 		models, err = runtimepi.ProbeModels(ctx, agentConfig(*item))
 	} else if kind == "trae" {
@@ -434,6 +460,18 @@ func isPi(item runtimeConfig) bool {
 
 func isOpenCode(item runtimeConfig) bool {
 	return item.Kind == "opencode" || (item.Kind == "" && item.Provider == "opencode")
+}
+
+// qoderVariant selects the Qoder CLI distribution. 千问办公 (QwenWork) ships the
+// same engine as qoderclicn with a separate account and configuration root.
+func qoderVariant(item runtimeConfig) (runtimeqoder.Variant, bool) {
+	switch {
+	case item.Kind == "qoder" || item.Kind == "qodercli" || (item.Kind == "" && item.Provider == "qoder"):
+		return runtimeqoder.Qoder, true
+	case item.Kind == "qwenwork" || item.Kind == "qoderclicn" || (item.Kind == "" && item.Provider == "qwenwork"):
+		return runtimeqoder.QwenWork, true
+	}
+	return runtimeqoder.Variant{}, false
 }
 
 func compatibleConfig(item runtimeConfig) runtimecodex.Config {

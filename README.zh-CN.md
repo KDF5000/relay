@@ -71,7 +71,7 @@ curl http://127.0.0.1:8787/version
 
 ### 2. 接入 Node
 
-在已经安装 Codex、`traex`/`trae-cli`、Claude Code、Pi 或 OpenCode 的机器上执行。Server 地址必须能从这台机器访问；远程 Server 不能使用 `127.0.0.1`。
+在已经安装 Codex、`traex`/`trae-cli`、Claude Code、Pi、OpenCode、Qoder（`qodercli`）或千问办公（`qoderclicn`）的机器上执行。Server 地址必须能从这台机器访问；远程 Server 不能使用 `127.0.0.1`。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KDF5000/relay/main/install.sh \
@@ -237,7 +237,7 @@ tail -f ~/.cache/relay/logs/node.log
 ~/.local/bin/relay-node -config ~/.config/relay/node.json
 ```
 
-常用安装参数包括 `--node-id`、`--capacity`、`--runtime auto|codex|trae|claude|pi|opencode|both|all`、`--version`、`--install-dir`、`--config` 和 `--force`。`auto` 自动发现所有已安装的受支持 CLI，`both` 仍表示 Codex 和 Trae，`all` 要求五种 CLI 全部可用。默认保留已有配置；传入 `--force` 时会先创建带时间戳的备份。
+常用安装参数包括 `--node-id`、`--capacity`、`--runtime auto|codex|trae|claude|pi|opencode|qoder|qwenwork|both|all`、`--version`、`--install-dir`、`--config` 和 `--force`。`auto` 自动发现所有已安装的受支持 CLI，`both` 仍表示 Codex 和 Trae，`all` 要求七种 CLI 全部可用。macOS 上除 `PATH` 外还会查找 `QoderWork.app`、`QwenWorkCN.app` 内置的 CLI。默认保留已有配置；传入 `--force` 时会先创建带时间戳的备份。
 
 ## 终端客户端
 
@@ -329,6 +329,8 @@ Git Workspace Provider 的可选参数，在 Relay 内没有业务工作流语�
 
 
 OpenCode 使用 `opencode run --format json`；v2 使用 `--standalone`，确保 Relay 能管理执行进程和取消。通过 `--session` 续接会话，旧会话丢失时用完整历史提示词恢复。文本块转为 `assistant.message.completed`，最后一个成功步骤的文本作为最终回答。`opencode models` 提供 `provider/model` 模型列表；Node 配置中的 `model` 可声明默认模型。`ephemeral` 每次新建会话且不向 Relay 返回会话 ID，OpenCode 仍可能在本地保存会话。工具权限在 OpenCode 自身配置，适配器不支持 `allowed_tools` / `disallowed_tools`。
+
+Qoder（`qodercli`，provider `qoder`）和千问办公（`qoderclicn`，provider `qwenwork`）共用一个适配器，使用 `--print --output-format stream-json`。通过 `--resume` 续接会话，会话失效时用完整历史提示词恢复；图片用 `--attachment` 传入，读取 `AGENTS.md`；`--list-models` 提供模型列表，内置模型用名称，自定义模型用 `mode-…` ID，CLI 默认 `Auto`。`ephemeral` 附加 `--no-session-persistence`。Hook 诊断输出不会转成事件。需要以 Node 的系统用户先执行一次 `qodercli login` / `qoderclicn login`，或通过 `pass_env` 传入 `QODER_PERSONAL_ACCESS_TOKEN`；千问办公桌面端的登录态不会共享给独立 CLI。无头运行无法响应权限确认，Qoder 默认策略下写文件和执行命令会被拒绝，需要显式选择策略，例如 `"args": ["--permission-mode", "accept_edits"]`。Qoder 的 `--allowed-tools` 在无头模式下不会预先授权，因此适配器拒绝 `allowed_tools` / `disallowed_tools`。
 
 ## 开发与验证
 
