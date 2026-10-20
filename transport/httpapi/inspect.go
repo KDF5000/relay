@@ -22,12 +22,14 @@ type Inspection struct {
 	Path      string              `json:"path"`
 }
 type InspectionResult struct {
-	Root    string      `json:"root"`
-	Path    string      `json:"path"`
-	Content string      `json:"content"`
-	Entries []FileEntry `json:"entries"`
-	Git     *GitStatus  `json:"git,omitempty"`
-	Error   string      `json:"error,omitempty"`
+	Encoding    string      `json:"encoding,omitempty"`
+	ContentType string      `json:"content_type,omitempty"`
+	Root        string      `json:"root"`
+	Path        string      `json:"path"`
+	Content     string      `json:"content"`
+	Entries     []FileEntry `json:"entries"`
+	Git         *GitStatus  `json:"git,omitempty"`
+	Error       string      `json:"error,omitempty"`
 }
 type GitStatus struct {
 	Repository bool   `json:"repository"`

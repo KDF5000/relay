@@ -3,9 +3,11 @@ package node
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -193,9 +195,19 @@ func inspectDirectory(ctx context.Context, root, operation, path string) (httpap
 		if !info.Mode().IsRegular() {
 			return result, errors.New("not a regular file")
 		}
-		data, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+		data, err := io.ReadAll(io.LimitReader(file, (2<<20)+1))
 		if err != nil {
 			return result, err
+		}
+		contentType := http.DetectContentType(data)
+		if contentType == "image/png" || contentType == "image/jpeg" || contentType == "image/gif" || contentType == "image/webp" {
+			if len(data) > 2<<20 {
+				return result, errors.New("image exceeds 2 MiB")
+			}
+			result.Encoding = "base64"
+			result.ContentType = contentType
+			result.Content = base64.StdEncoding.EncodeToString(data)
+			return result, nil
 		}
 		if len(data) > 1<<20 {
 			return result, errors.New("file exceeds 1 MiB")

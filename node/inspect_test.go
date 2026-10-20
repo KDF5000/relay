@@ -1,11 +1,15 @@
 package node
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"github.com/KDF5000/relay"
 	"github.com/KDF5000/relay/controlplane"
 	"github.com/KDF5000/relay/transport/httpapi"
 	"github.com/KDF5000/relay/workspace"
+	"image"
+	"image/png"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -48,6 +52,18 @@ func TestWorkspaceInspectionHTTPChain(t *testing.T) {
 	if err != nil || read.Content != "before\n" {
 		t.Fatalf("read: %+v %v", read, err)
 	}
+	var imageData bytes.Buffer
+	if err := png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "diagram.png"), imageData.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := client.InspectNodeWorkspace(ctx, worker.Registration.ID, workspaceSpec, "read", "diagram.png")
+	decoded, decodeErr := base64.StdEncoding.DecodeString(preview.Content)
+	if err != nil || preview.Encoding != "base64" || preview.ContentType != "image/png" || decodeErr != nil || !bytes.Equal(decoded, imageData.Bytes()) {
+		t.Fatalf("image preview: encoding=%q type=%q error=%v decode=%v", preview.Encoding, preview.ContentType, err, decodeErr)
+	}
 	if err := os.WriteFile(file, []byte("after\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +85,40 @@ func TestWorkspaceInspectionHTTPChain(t *testing.T) {
 	}
 	if _, err = client.InspectNodeWorkspace(ctx, worker.Registration.ID, workspaceSpec, "read", "escape"); err == nil {
 		t.Fatal("symlink escape accepted")
+	}
+}
+
+func TestWorkspaceImageReadLimitsAndBoundaries(t *testing.T) {
+	root := t.TempDir()
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	oversized := append(data.Bytes(), make([]byte, 2<<20)...)
+	if err := os.WriteFile(filepath.Join(root, "large.png"), oversized, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectDirectory(context.Background(), root, "read", "large.png"); err == nil || !strings.Contains(err.Error(), "image exceeds") {
+		t.Fatalf("large image: %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	if err := os.WriteFile(outside, data.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape.png")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"escape.png", "../outside.png", outside} {
+		if _, err := inspectDirectory(context.Background(), root, "read", path); err == nil {
+			t.Fatalf("outside image accepted: %s", path)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "fake.png"), []byte("text, not an image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := inspectDirectory(context.Background(), root, "read", "fake.png")
+	if err != nil || result.Encoding != "" || result.Content != "text, not an image" {
+		t.Fatalf("fake extension: %+v %v", result, err)
 	}
 }
 
