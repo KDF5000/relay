@@ -15,6 +15,7 @@ import (
 	"github.com/KDF5000/relay"
 	"github.com/KDF5000/relay/binding"
 	"github.com/KDF5000/relay/controlplane"
+	runtimeusage "github.com/KDF5000/relay/runtime/usage"
 	"github.com/KDF5000/relay/workspace"
 )
 
@@ -265,7 +266,13 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 		provider = w.Bindings
 	}
 	events := newEventBatcher(executionCtx, w.ControlPlane, assignment, w.Outbox, cancelExecution)
-	emit := events.Emit
+	usageTracker := runtimeusage.New(assignment.Request.Runtime.Provider, assignment.Request.Runtime.Model, assignment.RuntimeSessionID != "", assignment.RuntimeSessionID)
+	emit := func(eventCtx context.Context, kind string, data any) {
+		events.Emit(eventCtx, kind, data)
+		if usage := usageTracker.Observe(kind, data); usage != nil {
+			events.Emit(eventCtx, "usage.updated", usage)
+		}
+	}
 	if workDir != "" {
 		emit(ctx, "workspace.prepared", map[string]any{
 			"kind":     assignment.Request.Workspace.Kind,
@@ -293,6 +300,19 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 		Interactions:     interactionBroker{controlPlane: w.ControlPlane, assignment: assignment},
 		Emit:             emit,
 	})
+	usage := usageTracker.Finish(executionErr == nil)
+	if usage == nil && result.Usage.Valid() {
+		usage = result.Usage
+	}
+	if usage != nil {
+		if executionErr != nil {
+			partial := *usage
+			partial.Status = "partial"
+			usage = &partial
+		}
+		result.Usage = usage
+		events.Emit(ctx, "usage.updated", usage)
+	}
 	executionErr = errors.Join(executionErr, events.Close())
 	stopLease := func() error {
 		stopKeeper()

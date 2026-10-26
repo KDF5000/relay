@@ -162,6 +162,7 @@ type CapabilityResult struct {
 }
 
 type Result struct {
+	Usage            *Usage          `json:"usage,omitempty"`
 	Summary          string          `json:"summary"`
 	Output           json.RawMessage `json:"output,omitempty"`
 	Artifacts        []Artifact      `json:"artifacts,omitempty"`
@@ -192,6 +193,7 @@ type Attempt struct {
 }
 
 type Run struct {
+	Usage             *Usage             `json:"usage,omitempty"`
 	ID                string             `json:"id"`
 	TenantID          string             `json:"tenant_id,omitempty"`
 	ProjectID         string             `json:"project_id,omitempty"`

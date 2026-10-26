@@ -416,7 +416,9 @@ func (s *MemoryStorage) GetRun(_ context.Context, runID string) (relay.Run, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if run := s.runs[runID]; run != nil {
-		return *run, nil
+		result := *run
+		result.Usage = relay.AggregateUsage(s.events[runID], run.Attempt.Number)
+		return result, nil
 	}
 	return relay.Run{}, ErrNotFound
 }

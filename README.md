@@ -409,3 +409,5 @@ Pushing a `v*` tag runs the [release workflow](.github/workflows/release.yml), v
 
 Host products can expose their own capabilities through bindings while Relay Core remains unaware of
 their domain semantics. The next product-level validation will be designed separately from Relay Core.
+
+Token usage protocol and runtime coverage: [Run token usage](docs/usage.md).

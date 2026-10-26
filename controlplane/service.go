@@ -238,6 +238,9 @@ func (s *Service) AcknowledgeCancellation(ctx context.Context, assignment Assign
 }
 
 func (s *Service) AppendEvent(ctx context.Context, runID, attemptID, lease, eventType string, data any, eventIDs ...string) error {
+	if err := validateUsageEvent(eventType, data); err != nil {
+		return err
+	}
 	if err := s.authorizeNodeRun(ctx, runID); err != nil {
 		return err
 	}
@@ -256,6 +259,9 @@ func (s *Service) AppendEvents(ctx context.Context, runID, attemptID, lease stri
 		return fmt.Errorf("producer event batch must contain 1 to %d events", MaxProducerEventBatch)
 	}
 	for _, event := range events {
+		if err := validateUsageEvent(event.Type, event.Data); err != nil {
+			return err
+		}
 		if event.EventID == "" || event.Type == "" {
 			return errors.New("producer event ID and type are required")
 		}
@@ -448,4 +454,19 @@ func (s *Service) Interactions(ctx context.Context, runID string) ([]relay.Inter
 func (s *Service) ResolveInteraction(ctx context.Context, id string, response json.RawMessage) (relay.Interaction, error) {
 	scope, _ := AccessFrom(ctx)
 	return s.storage.ResolveInteraction(ctx, id, response, scope.TenantID, scope.ProjectID)
+}
+
+func validateUsageEvent(kind string, data any) error {
+	if kind != "usage.updated" {
+		return nil
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	var usage relay.Usage
+	if json.Unmarshal(raw, &usage) != nil || !usage.Valid() {
+		return errors.New("invalid usage snapshot")
+	}
+	return nil
 }

@@ -651,7 +651,27 @@ func (s *Store) GetRun(ctx context.Context, runID string) (relay.Run, error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return relay.Run{}, controlplane.ErrNotFound
 	}
-	return run, err
+	if err != nil {
+		return run, err
+	}
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (attempt_id) attempt_id,sequence,data FROM relay_events WHERE run_id=$1 AND type='usage.updated' ORDER BY attempt_id,sequence DESC`, runID)
+	if err != nil {
+		return relay.Run{}, err
+	}
+	defer rows.Close()
+	events := []relay.Event{}
+	for rows.Next() {
+		e := relay.Event{Type: "usage.updated"}
+		if err := rows.Scan(&e.AttemptID, &e.Sequence, &e.Data); err != nil {
+			return relay.Run{}, err
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return relay.Run{}, err
+	}
+	run.Usage = relay.AggregateUsage(events, run.Attempt.Number)
+	return run, nil
 }
 
 func (s *Store) Events(ctx context.Context, runID string) ([]relay.Event, error) {

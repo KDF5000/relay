@@ -168,6 +168,9 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 		return relay.Result{}, fmt.Errorf("relay %s: invalid %s response", fork.Name, threadMethod)
 	}
 	threadID := started.Thread.ID
+	if execution.Emit != nil {
+		execution.Emit(ctx, "runtime."+fork.Name+".usage.scope", map[string]string{"thread_id": threadID})
+	}
 	turnInput := []map[string]string{{"type": "text", "text": prompt}}
 	for _, imagePath := range imagePaths {
 		turnInput = append(turnInput, map[string]string{"type": "localImage", "path": imagePath})
@@ -192,6 +195,9 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 			if rpc.Error != nil {
 				return relay.Result{}, errors.New(rpc.Error.Message)
 			}
+			// The start response establishes which turn belongs to this Run.
+			// Restored usage notifications can arrive before this response.
+			emitAppServerEvent(ctx, execution, fork.Name, rpcMessage{Method: "turn/started", Params: rpc.Result})
 			turnStarted = true
 			continue
 		}
