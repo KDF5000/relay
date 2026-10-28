@@ -104,6 +104,7 @@ func (e Executor) Execute(ctx context.Context, execution relay.Execution) (relay
 	emit("runtime.opencode.started", map[string]string{"binary": binary, "work_dir": run.WorkDir})
 	decoder := json.NewDecoder(stdout)
 	sessionID := ""
+	messageID := ""
 	var text strings.Builder
 	var protocolError, finishReason string
 	sawFinish := false
@@ -125,7 +126,14 @@ func (e Executor) Execute(ctx context.Context, execution relay.Execution) (relay
 			text.Reset()
 			sawFinish = false
 			finishReason = ""
+			messageID, _ = part["messageID"].(string)
 		case "text":
+			if id, _ := part["messageID"].(string); id != "" {
+				if messageID != "" && messageID != id {
+					protocolError = "text belongs to a different assistant message"
+				}
+				messageID = id
+			}
 			if value, _ := part["text"].(string); value != "" {
 				text.WriteString(value)
 				emit("assistant.message.completed", map[string]string{"text": value})
@@ -157,7 +165,17 @@ func (e Executor) Execute(ctx context.Context, execution relay.Execution) (relay
 	if waitErr != nil {
 		return relay.Result{}, fmt.Errorf("relay opencode: process failed: %w: %s", waitErr, agentcli.Truncate(stderr.String(), 8192))
 	}
-	if !sawFinish || (finishReason != "stop" && finishReason != "end_turn") {
+	if (!sawFinish || finishReason == "") && isV2(version) && sessionID != "" && messageID != "" && strings.TrimSpace(text.String()) != "" {
+		// V2 can emit only step_start and text even when its native message
+		// has completed. Verify that exact message, never an earlier reply.
+		finishReason, err = verifyNativeCompletion(ctx, binary, config, run, sessionID, messageID)
+		if err != nil {
+			return relay.Result{}, fmt.Errorf("relay opencode: stream ended without a successful final step: %w", err)
+		}
+		sawFinish = true
+		emit("runtime.opencode.completion.verified", map[string]string{"session_id": sessionID, "message_id": messageID, "reason": finishReason, "source": "session.export"})
+	}
+	if !sawFinish || !successfulFinish(finishReason) {
 		return relay.Result{}, fmt.Errorf("relay opencode: stream ended without a successful final step (reason %q)", finishReason)
 	}
 	finalMessage := strings.TrimSpace(text.String())
