@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -185,25 +186,73 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 	if err != nil {
 		return relay.Run{}, err
 	}
+	if err := w.ControlPlane.Start(ctx, assignment); err != nil {
+		if errors.Is(err, controlplane.ErrRunCancelled) {
+			if ackErr := w.ControlPlane.AcknowledgeCancellation(ctx, assignment); ackErr != nil {
+				return relay.Run{}, ackErr
+			}
+			return cancelledRun(assignment), nil
+		}
+		return relay.Run{}, err
+	}
+	executionCtx, cancelExecution := context.WithCancel(ctx)
+	defer cancelExecution()
+	keeperCtx, stopKeeper := context.WithCancel(ctx)
+	keeperDone := make(chan error, 1)
+	go func(leaseAssignment controlplane.Assignment) {
+		keeperDone <- w.keepLease(keeperCtx, leaseAssignment, cancelExecution)
+	}(assignment)
+
+	var leaseOnce sync.Once
+	var stoppedLeaseErr error
+	stopLease := func() error {
+		leaseOnce.Do(func() { stopKeeper(); stoppedLeaseErr = <-keeperDone })
+		return stoppedLeaseErr
+	}
+	defer stopLease()
+	events := newEventBatcher(executionCtx, w.ControlPlane, assignment, w.Outbox, cancelExecution)
+	defer events.Close()
+	failRun := func(cause error) (relay.Run, error) {
+		cause = errors.Join(cause, events.Close())
+		reportErr := retryFinalReport(ctx, func(reportCtx context.Context) error {
+			return w.ControlPlane.Fail(reportCtx, assignment, cause.Error())
+		})
+		leaseErr := stopLease()
+		if errors.Is(reportErr, controlplane.ErrRunCancelled) || errors.Is(leaseErr, controlplane.ErrRunCancelled) {
+			ackErr := w.ControlPlane.AcknowledgeCancellation(ctx, assignment)
+			if ackErr != nil && !errors.Is(ackErr, controlplane.ErrInvalidTransition) {
+				return relay.Run{}, errors.Join(cause, reportErr, leaseErr, ackErr)
+			}
+			return cancelledRun(assignment), nil
+		}
+		// Once the failure was committed, a renewal racing with that terminal
+		// transition is harmless and must not hide the original execution error.
+		if reportErr == nil {
+			return relay.Run{}, cause
+		}
+		return relay.Run{}, errors.Join(cause, reportErr, leaseErr)
+	}
 	executor, ok := w.Executors.Resolve(assignment.Request.Runtime.Provider)
 	if !ok {
 		cause := fmt.Sprintf("runtime provider %q is unavailable", assignment.Request.Runtime.Provider)
-		_ = w.ControlPlane.Fail(ctx, assignment, cause)
-		return relay.Run{}, errors.New(cause)
+		return failRun(errors.New(cause))
 	}
 	workDir := ""
 	cleanupWorkspace := func(context.Context) error { return nil }
 	if assignment.Request.Workspace.Kind != "" {
 		if w.Workspaces == nil {
 			cause := "workspace requested but no workspace provider is configured"
-			_ = w.ControlPlane.Fail(ctx, assignment, cause)
-			return relay.Run{}, errors.New(cause)
+			return failRun(errors.New(cause))
 		}
-		prepared, prepareErr := w.Workspaces.Prepare(ctx, assignment.RunID, assignment.AttemptID, assignment.Request.Workspace)
+		preparingAt := time.Now()
+		events.Emit(executionCtx, "workspace.preparing", map[string]any{"kind": assignment.Request.Workspace.Kind})
+		slog.Info("preparing workspace", "run_id", assignment.RunID, "kind", assignment.Request.Workspace.Kind)
+		prepared, prepareErr := w.Workspaces.Prepare(executionCtx, assignment.RunID, assignment.AttemptID, assignment.Request.Workspace)
 		if prepareErr != nil {
-			_ = w.ControlPlane.Fail(ctx, assignment, prepareErr.Error())
-			return relay.Run{}, prepareErr
+			slog.Warn("workspace preparation failed", "run_id", assignment.RunID, "duration", time.Since(preparingAt), "error", prepareErr)
+			return failRun(prepareErr)
 		}
+		slog.Info("workspace prepared", "run_id", assignment.RunID, "duration", time.Since(preparingAt))
 		workDir, cleanupWorkspace = prepared.Dir, prepared.Cleanup
 		w.rememberInspection(assignment.RunID, workDir)
 		assignment.Request.Instructions.Workspace = append(
@@ -221,6 +270,9 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 			_ = cleanupWorkspace(cleanupCtx)
 		}()
 	}
+	if err := executionCtx.Err(); err != nil {
+		return failRun(err)
+	}
 	compiler := w.Compiler
 	if compiler == nil {
 		compiler = relay.DefaultInstructionCompiler{}
@@ -231,8 +283,7 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 	}
 	fallbackCompiled, err := compiler.Compile(assignment.Request.Input, instructions)
 	if err != nil {
-		_ = w.ControlPlane.Fail(ctx, assignment, err.Error())
-		return relay.Run{}, err
+		return failRun(err)
 	}
 	compiled := fallbackCompiled
 	if assignment.RuntimeSessionID != "" && assignment.Request.Input.ContinuationPrompt != "" {
@@ -240,32 +291,14 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 		continuationInput.Prompt = continuationInput.ContinuationPrompt
 		compiled, err = compiler.Compile(continuationInput, instructions)
 		if err != nil {
-			_ = w.ControlPlane.Fail(ctx, assignment, err.Error())
-			return relay.Run{}, err
+			return failRun(err)
 		}
 	}
-	if err := w.ControlPlane.Start(ctx, assignment); err != nil {
-		if errors.Is(err, controlplane.ErrRunCancelled) {
-			if ackErr := w.ControlPlane.AcknowledgeCancellation(ctx, assignment); ackErr != nil {
-				return relay.Run{}, ackErr
-			}
-			return cancelledRun(assignment), nil
-		}
-		return relay.Run{}, err
-	}
-	executionCtx, cancelExecution := context.WithCancel(ctx)
-	defer cancelExecution()
-	keeperCtx, stopKeeper := context.WithCancel(ctx)
-	keeperDone := make(chan error, 1)
-	go func() {
-		keeperDone <- w.keepLease(keeperCtx, assignment, cancelExecution)
-	}()
 	run := relay.Run{ID: assignment.RunID, AgentID: assignment.Request.AgentID, Runtime: assignment.Request.Runtime, Source: assignment.Request.Source, Attempt: relay.Attempt{ID: assignment.AttemptID, NodeID: w.Registration.ID}}
 	provider := relay.CapabilityProvider(nil)
 	if w.Bindings != nil {
 		provider = w.Bindings
 	}
-	events := newEventBatcher(executionCtx, w.ControlPlane, assignment, w.Outbox, cancelExecution)
 	usageTracker := runtimeusage.New(assignment.Request.Runtime.Provider, assignment.Request.Runtime.Model, assignment.RuntimeSessionID != "", assignment.RuntimeSessionID)
 	emit := func(eventCtx context.Context, kind string, data any) {
 		events.Emit(eventCtx, kind, data)
@@ -314,29 +347,6 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 		events.Emit(ctx, "usage.updated", usage)
 	}
 	executionErr = errors.Join(executionErr, events.Close())
-	stopLease := func() error {
-		stopKeeper()
-		return <-keeperDone
-	}
-	failRun := func(cause error) (relay.Run, error) {
-		reportErr := retryFinalReport(ctx, func(reportCtx context.Context) error {
-			return w.ControlPlane.Fail(reportCtx, assignment, cause.Error())
-		})
-		leaseErr := stopLease()
-		if errors.Is(reportErr, controlplane.ErrRunCancelled) || errors.Is(leaseErr, controlplane.ErrRunCancelled) {
-			ackErr := w.ControlPlane.AcknowledgeCancellation(ctx, assignment)
-			if ackErr != nil && !errors.Is(ackErr, controlplane.ErrInvalidTransition) {
-				return relay.Run{}, errors.Join(cause, reportErr, leaseErr, ackErr)
-			}
-			return cancelledRun(assignment), nil
-		}
-		// Once the failure was committed, a renewal racing with that terminal
-		// transition is harmless and must not hide the original execution error.
-		if reportErr == nil {
-			return relay.Run{}, cause
-		}
-		return relay.Run{}, errors.Join(cause, reportErr, leaseErr)
-	}
 	if executionErr != nil {
 		return failRun(executionErr)
 	}

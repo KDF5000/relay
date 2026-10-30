@@ -222,6 +222,19 @@ Artifacts use a persistent Docker volume by default. Relay Server can also use S
 
 ### Node service operations
 
+Workspace preparation is part of the running attempt. Lease renewal and cancellation
+monitoring begin immediately after the Node claims and starts the attempt, before
+Git cloning, fetching, or worktree lock acquisition. A large repository can take
+longer than one lease period without being reassigned. `workspace.preparing` is
+emitted before preparation and `workspace.prepared` when it finishes; Node logs
+include the Run ID and preparation duration. Runtime execution starts only after
+the workspace is ready. Repository locks are independent, while reusable worktrees
+remain exclusive for their execution lifetime. Lock waits and Git subprocesses
+observe cancellation. A cancelled clone is discarded before publishing its mirror;
+existing mirrors and worktree edits are preserved. Git runs without terminal prompts;
+credentials must be available to the Node's service environment. No short fixed clone
+timeout is imposed; caller deadlines and cancellation still apply.
+
 Nodes persist unacknowledged events before sending. On restart, they replay events
 under valid leases and mark interrupted attempts as failed; this does not resume
 the agent process. Stale events are discarded with a log entry. Unknown network

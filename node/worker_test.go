@@ -591,3 +591,138 @@ func TestRunPoolAppliesCapacityChangesWithoutCancellingActiveRuns(t *testing.T) 
 	}
 	stopExecutions()
 }
+
+type workspaceFunc func(context.Context, string, string, relay.WorkspaceSpec) (workspace.Prepared, error)
+
+func (f workspaceFunc) Prepare(ctx context.Context, runID, attemptID string, spec relay.WorkspaceSpec) (workspace.Prepared, error) {
+	return f(ctx, runID, attemptID, spec)
+}
+
+func TestWorkerMaintainsLeaseAndReportsWorkspacePreparation(t *testing.T) {
+	ctx := context.Background()
+	service := controlplane.New(120 * time.Millisecond)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var executions atomic.Int32
+	worker := &node.Worker{Registration: controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "prepare-node", Runtimes: []controlplane.Runtime{{Provider: "test"}}, Capacity: 2}, ControlPlane: service,
+		Workspaces: workspaceFunc(func(ctx context.Context, _ string, _ string, _ relay.WorkspaceSpec) (workspace.Prepared, error) {
+			close(entered)
+			select {
+			case <-ctx.Done():
+				return workspace.Prepared{}, ctx.Err()
+			case <-release:
+				return workspace.Prepared{Dir: t.TempDir(), Cleanup: func(context.Context) error { return nil }}, nil
+			}
+		}),
+		Executors: node.ExecutorMap{"test": relay.ExecutorFunc(func(context.Context, relay.Execution) (relay.Result, error) {
+			executions.Add(1)
+			return relay.Result{Summary: "done"}, nil
+		})}}
+	if _, err := worker.Register(ctx); err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Submit(ctx, relay.Request{AgentID: "agent", IdempotencyKey: "long-prepare", Runtime: relay.RuntimeRequirement{Provider: "test"}, Input: relay.Input{Prompt: "hi"}, Workspace: relay.WorkspaceSpec{Kind: "git", Source: "/repo"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := worker.RunOnce(ctx); done <- err }()
+	<-entered
+	// Stay in preparation for several lease periods, while reconciliation runs.
+	until := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(until) {
+		time.Sleep(20 * time.Millisecond)
+		if _, err := service.Reconcile(ctx, 20); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.Claim(ctx, "prepare-node"); !errors.Is(err, controlplane.ErrNoAssignment) {
+			t.Fatalf("task was assigned twice during preparation: %v", err)
+		}
+	}
+	persisted, err := service.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Attempt.Number != 1 || persisted.Attempt.Status != relay.AttemptRunning {
+		t.Fatalf("preparation lost lease: %+v", persisted)
+	}
+	events, err := service.Events(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range events {
+		if e.Type == "workspace.preparing" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("preparation progress missing")
+	}
+	if executions.Load() != 0 {
+		t.Fatal("runtime must not start before preparation")
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not finish")
+	}
+	if executions.Load() != 1 {
+		t.Fatal("runtime executed more than once")
+	}
+}
+
+func TestWorkerCancelsWhilePreparingWorkspace(t *testing.T) {
+	ctx := context.Background()
+	service := controlplane.New(120 * time.Millisecond)
+	entered := make(chan struct{})
+	var executed atomic.Bool
+	worker := &node.Worker{Registration: controlplane.NodeRegistration{ProtocolVersion: relay.ProtocolVersion, ID: "cancel-prepare", Runtimes: []controlplane.Runtime{{Provider: "test"}}, Capacity: 1}, ControlPlane: service,
+		Workspaces: workspaceFunc(func(ctx context.Context, _ string, _ string, _ relay.WorkspaceSpec) (workspace.Prepared, error) {
+			close(entered)
+			<-ctx.Done()
+			return workspace.Prepared{}, ctx.Err()
+		}),
+		Executors: node.ExecutorMap{"test": relay.ExecutorFunc(func(context.Context, relay.Execution) (relay.Result, error) {
+			executed.Store(true)
+			return relay.Result{}, nil
+		})}}
+	if _, err := worker.Register(ctx); err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Submit(ctx, relay.Request{AgentID: "agent", IdempotencyKey: "cancel-prepare", Runtime: relay.RuntimeRequirement{Provider: "test"}, Input: relay.Input{Prompt: "hi"}, Workspace: relay.WorkspaceSpec{Kind: "git", Source: "/repo"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		finished, err := worker.RunOnce(ctx)
+		if err == nil && finished.Status != relay.RunCancelled {
+			err = fmt.Errorf("status %s", finished.Status)
+		}
+		done <- err
+	}()
+	<-entered
+	if _, err := service.CancelRun(ctx, run.ID, controlplane.CancelRequest{Reason: "stop cloning"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("preparation ignored cancellation")
+	}
+	if executed.Load() {
+		t.Fatal("runtime started after cancellation")
+	}
+	persisted, err := service.GetRun(ctx, run.ID)
+	if err != nil || persisted.Status != relay.RunCancelled {
+		t.Fatalf("cancellation not persisted: %+v %v", persisted, err)
+	}
+}

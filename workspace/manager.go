@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/KDF5000/relay"
 	runtimeprocess "github.com/KDF5000/relay/runtime/process"
@@ -36,7 +37,7 @@ type Releaser interface {
 type Manager struct {
 	Root string
 	mu   sync.Mutex
-	keys map[string]*sync.Mutex
+	keys map[string]chan struct{}
 }
 
 func (m *Manager) Prepare(ctx context.Context, runID, attemptID string, spec relay.WorkspaceSpec) (Prepared, error) {
@@ -98,10 +99,16 @@ func (m *Manager) Release(ctx context.Context, spec relay.WorkspaceSpec) error {
 	mirror := filepath.Join(root, "git", hex.EncodeToString(sourceDigest[:12])+".git")
 	keyDigest := sha256.Sum256([]byte(spec.Source + "\x00" + spec.ReuseKey))
 	worktree := filepath.Join(root, "reusable", hex.EncodeToString(keyDigest[:16]))
-	release := m.lockKey(hex.EncodeToString(keyDigest[:]))
+	release, err := m.lockKey(ctx, "worktree:"+hex.EncodeToString(keyDigest[:]))
+	if err != nil {
+		return err
+	}
 	defer release()
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	releaseMirror, err := m.lockKey(ctx, "mirror:"+mirror)
+	if err != nil {
+		return err
+	}
+	defer releaseMirror()
 	if _, err := os.Stat(worktree); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
@@ -122,7 +129,11 @@ func (m *Manager) prepareGit(ctx context.Context, root, runID, attemptID string,
 	if reusable {
 		keyDigest := sha256.Sum256([]byte(spec.Source + "\x00" + spec.ReuseKey))
 		worktree = filepath.Join(root, "reusable", hex.EncodeToString(keyDigest[:16]))
-		release = m.lockKey(hex.EncodeToString(keyDigest[:]))
+		var err error
+		release, err = m.lockKey(ctx, "worktree:"+hex.EncodeToString(keyDigest[:]))
+		if err != nil {
+			return Prepared{}, err
+		}
 	}
 	keepLock := false
 	defer func() {
@@ -134,18 +145,31 @@ func (m *Manager) prepareGit(ctx context.Context, root, runID, attemptID string,
 	if ref == "" {
 		ref = "HEAD"
 	}
-	m.mu.Lock()
+	releaseMirror, err := m.lockKey(ctx, "mirror:"+mirror)
+	if err != nil {
+		return Prepared{}, err
+	}
 	locked := true
 	defer func() {
 		if locked {
-			m.mu.Unlock()
+			releaseMirror()
 		}
 	}()
 	if _, err := os.Stat(mirror); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(filepath.Dir(mirror), 0o700); err != nil {
 			return Prepared{}, err
 		}
-		if err := runGit(ctx, "", "clone", "--mirror", "--", spec.Source, mirror); err != nil {
+		// Publish only a completed mirror; a cancelled clone must not leave a
+		// partial repository that the next task mistakes for a valid cache.
+		staging, err := os.MkdirTemp(filepath.Dir(mirror), ".clone-")
+		if err != nil {
+			return Prepared{}, err
+		}
+		defer os.RemoveAll(staging)
+		if err := runGit(ctx, "", "clone", "--mirror", "--", spec.Source, filepath.Join(staging, "mirror.git")); err != nil {
+			return Prepared{}, err
+		}
+		if err := os.Rename(filepath.Join(staging, "mirror.git"), mirror); err != nil {
 			return Prepared{}, err
 		}
 	} else if err != nil {
@@ -170,7 +194,7 @@ func (m *Manager) prepareGit(ctx context.Context, root, runID, attemptID string,
 			if err := runGit(ctx, worktree, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
 				return Prepared{}, fmt.Errorf("relay workspace: reusable workspace has no valid HEAD; preserve pending changes and recreate it: %w", err)
 			}
-			m.mu.Unlock()
+			releaseMirror()
 			locked = false
 			prepared, err := preparedDirectory(root, worktree, spec.Subdir, false)
 			if err != nil {
@@ -206,13 +230,16 @@ func (m *Manager) prepareGit(ctx context.Context, root, runID, attemptID string,
 	if err := runGit(ctx, mirror, args...); err != nil {
 		return Prepared{}, err
 	}
-	m.mu.Unlock()
+	releaseMirror()
 	locked = false
 	prepared, err := preparedDirectory(root, worktree, spec.Subdir, false)
 	if err != nil {
-		m.mu.Lock()
-		_ = runGit(context.Background(), mirror, "worktree", "remove", "--force", worktree)
-		m.mu.Unlock()
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if unlock, lockErr := m.lockKey(cleanupCtx, "mirror:"+mirror); lockErr == nil {
+			_ = runGit(cleanupCtx, mirror, "worktree", "remove", "--force", worktree)
+			unlock()
+		}
 		return Prepared{}, err
 	}
 	if reusable {
@@ -224,8 +251,11 @@ func (m *Manager) prepareGit(ctx context.Context, root, runID, attemptID string,
 		return prepared, nil
 	}
 	prepared.Cleanup = func(cleanupCtx context.Context) error {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+		unlock, err := m.lockKey(cleanupCtx, "mirror:"+mirror)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		return runGit(cleanupCtx, mirror, "worktree", "remove", "--force", worktree)
 	}
 	return prepared, nil
@@ -255,19 +285,29 @@ func validateSpec(spec relay.WorkspaceSpec) error {
 	return nil
 }
 
-func (m *Manager) lockKey(key string) func() {
+// Repository locks serialize changes to one mirror without blocking other repos.
+// Worktree locks protect a reusable checkout for its whole execution lifetime.
+func (m *Manager) lockKey(ctx context.Context, key string) (func(), error) {
 	m.mu.Lock()
 	if m.keys == nil {
-		m.keys = map[string]*sync.Mutex{}
+		m.keys = map[string]chan struct{}{}
 	}
 	lock := m.keys[key]
 	if lock == nil {
-		lock = &sync.Mutex{}
+		lock = make(chan struct{}, 1)
 		m.keys[key] = lock
 	}
 	m.mu.Unlock()
-	lock.Lock()
-	return lock.Unlock
+	select {
+	case lock <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-lock
+			return nil, err
+		}
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func gitRefExists(ctx context.Context, dir, ref string) bool {
@@ -308,6 +348,7 @@ func runGit(ctx context.Context, dir string, args ...string) error {
 	command := exec.CommandContext(ctx, "git", args...)
 	runtimeprocess.Configure(command)
 	command.Dir = dir
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("relay workspace: git %s: %w: %s", args[0], err, strings.TrimSpace(string(output)))
