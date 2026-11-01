@@ -33,6 +33,7 @@ import (
 
 type config struct {
 	Server         string                        `json:"server"`
+	Servers        []string                      `json:"servers,omitempty"`
 	Token          string                        `json:"token,omitempty"`
 	Node           controlplane.NodeRegistration `json:"node"`
 	Runtimes       []runtimeConfig               `json:"runtimes"`
@@ -200,7 +201,19 @@ func main() {
 	if token == "" {
 		token = os.Getenv("RELAY_NODE_TOKEN")
 	}
-	client := httpapi.NewAuthenticatedClient(cfg.Server, token)
+	serverURLs := append([]string(nil), cfg.Servers...)
+	if len(serverURLs) == 0 {
+		serverURLs = []string{cfg.Server}
+	} else if cfg.Server != "" {
+		serverURLs = append([]string{cfg.Server}, serverURLs...)
+	}
+	client := httpapi.NewNodeFailoverClient(serverURLs, token)
+	if len(client.URLs()) == 0 {
+		log.Fatal("at least one Relay server URL is required")
+	}
+	client.SetRouteChangeHandler(func(from, to string) {
+		log.Printf("Relay route changed from %s to %s", from, to)
+	})
 	if cfg.OutboxRoot == "" {
 		root, err := os.UserConfigDir()
 		if err != nil {
@@ -208,7 +221,13 @@ func main() {
 		}
 		cfg.OutboxRoot = filepath.Join(root, "relay", "outbox")
 	}
-	scope := sha256.Sum256([]byte(cfg.Server + "\x00" + cfg.Node.ID))
+	// Keep the spool identity tied to the configured control plane rather than
+	// the currently active route, so failover never strands pending events.
+	scopeServer := cfg.Server
+	if scopeServer == "" {
+		scopeServer = client.URLs()[0]
+	}
+	scope := sha256.Sum256([]byte(scopeServer + "\x00" + cfg.Node.ID))
 	cfg.OutboxRoot = filepath.Join(cfg.OutboxRoot, fmt.Sprintf("%x", scope[:16]))
 	outbox, err := node.OpenOutbox(cfg.OutboxRoot, cfg.OutboxMaxBytes)
 	if err != nil {

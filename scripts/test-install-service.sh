@@ -40,14 +40,29 @@ cat >"$fake_bin/curl" <<'EOF'
 #!/bin/sh
 output=""
 url=""
+write_out=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) output=$2; shift 2 ;;
+    -w) write_out=$2; shift 2 ;;
+    -H|-d|--data-binary) shift 2 ;;
     -*) shift ;;
     *) url=$1; shift ;;
   esac
 done
-cp "$FAKE_RELEASE_DIR/$(basename "$url")" "$output"
+case "$url" in
+  */relay-node-enrollments/claim)
+    cat >"$output" <<'RESPONSE'
+relay-enrollment-v1
+node_id	node_from_steer
+node_token	relay_node_v1.scoped
+server	https://relay-direct.example.com:8443
+server	https://relay-tunnel.example.com
+RESPONSE
+    [ -z "$write_out" ] || printf '201'
+    ;;
+  *) cp "$FAKE_RELEASE_DIR/$(basename "$url")" "$output" ;;
+esac
 EOF
 
 for runtime_binary in codex traex claude pi opencode qodercli qoderclicn; do
@@ -113,6 +128,28 @@ test "$(stat -c '%a' "$mac_plist" 2>/dev/null || stat -f '%Lp' "$mac_plist")" = 
 grep -F '<string>token-with-special-&amp;&lt;&gt;&quot;&apos;</string>' "$mac_plist" >/dev/null
 grep -F 'bootstrap gui/' "$test_root/Darwin-service.log" >/dev/null
 grep -F 'kickstart -k gui/' "$test_root/Darwin-service.log" >/dev/null
+
+enroll_home="$test_root/home-enroll"
+enroll_log="$test_root/enroll-service.log"
+mkdir -p "$enroll_home"
+: >"$enroll_log"
+HOME="$enroll_home" \
+  XDG_CONFIG_HOME="$enroll_home/.config" \
+  XDG_CACHE_HOME="$enroll_home/.cache" \
+  PATH="$fake_bin:$PATH" \
+  FAKE_OS=Linux \
+  FAKE_RELEASE_DIR="$release_dir" \
+  FAKE_SERVICE_LOG="$enroll_log" \
+  RELAY_DOWNLOAD_BASE_URL="https://example.invalid/release" \
+  sh "$repository_root/install.sh" \
+    --runtime codex \
+    --enroll 'https://steer.example.com/api/v1#steer_enr_once'
+enroll_config="$enroll_home/.config/relay/node.json"
+grep -F '"server": "https://relay-direct.example.com:8443"' "$enroll_config" >/dev/null
+grep -F '"servers": ["https://relay-direct.example.com:8443","https://relay-tunnel.example.com"]' "$enroll_config" >/dev/null
+grep -F '"token": "relay_node_v1.scoped"' "$enroll_config" >/dev/null
+grep -F '"id": "node_from_steer"' "$enroll_config" >/dev/null
+grep -F 'enable --now relay-node.service' "$enroll_log" >/dev/null
 if command -v plutil >/dev/null 2>&1; then
   plutil -lint "$mac_plist" >/dev/null
 fi
