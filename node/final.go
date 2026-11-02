@@ -10,7 +10,7 @@ import (
 )
 
 func retryFinalReport(ctx context.Context, report func(context.Context) error) error {
-	reportCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	reportCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	delay := 100 * time.Millisecond
 	var last error

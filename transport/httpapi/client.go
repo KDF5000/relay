@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -24,6 +25,8 @@ var ErrEventStreamInterrupted = errors.New("relay HTTP: event stream ended befor
 // Keep a defensive bound, but do not truncate normal long-running sessions at
 // the former 8 MiB limit and then surface a misleading JSON decode error.
 const maxJSONResponseBytes = 64 << 20
+
+const requestTimeout = 60 * time.Second
 
 type Client struct {
 	BaseURL string
@@ -43,7 +46,18 @@ func (c *Client) authorize(request *http.Request) {
 }
 
 func NewClient(baseURL string) *Client {
-	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: &http.Client{Timeout: 30 * time.Second}}
+	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: newHTTPClient()}
+}
+
+func newHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.TLSHandshakeTimeout = 20 * time.Second
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	return &http.Client{Transport: transport, Timeout: requestTimeout}
 }
 
 func (c *Client) Health(ctx context.Context) error {
@@ -115,7 +129,7 @@ func (c *Client) GetInteraction(ctx context.Context, a controlplane.Assignment, 
 	c.authorize(request)
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = newHTTPClient()
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -148,7 +162,7 @@ func (c *Client) OpenArtifact(ctx context.Context, artifactID string) (io.ReadCl
 	c.authorize(request)
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = newHTTPClient()
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -175,7 +189,7 @@ func (c *Client) UploadArtifact(ctx context.Context, assignment controlplane.Ass
 	}
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = newHTTPClient()
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -352,7 +366,7 @@ func (c *Client) do(ctx context.Context, method, path string, input, output any)
 	c.authorize(request)
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = newHTTPClient()
 	}
 	response, err := client.Do(request)
 	if err != nil {

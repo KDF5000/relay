@@ -112,3 +112,20 @@ func TestNodeFailoverClientReturnsToPreferredRoute(t *testing.T) {
 		t.Fatalf("active route = %d, want preferred", active)
 	}
 }
+
+func TestNodeHTTPClientAllowsHighLatencyFallbackResponses(t *testing.T) {
+	client := NewClient("https://relay.example.test")
+	if client.HTTP.Timeout != 60*time.Second {
+		t.Fatalf("request timeout = %s, want 60s", client.HTTP.Timeout)
+	}
+	transport, ok := client.HTTP.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want *http.Transport", client.HTTP.Transport)
+	}
+	if transport.TLSHandshakeTimeout != 20*time.Second {
+		t.Fatalf("TLS handshake timeout = %s, want 20s", transport.TLSHandshakeTimeout)
+	}
+	if transport.ResponseHeaderTimeout != 30*time.Second {
+		t.Fatalf("response header timeout = %s, want 30s", transport.ResponseHeaderTimeout)
+	}
+}

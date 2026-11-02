@@ -53,7 +53,7 @@ func deliverEvent(ctx context.Context, cp ControlPlane, a controlplane.Assignmen
 	if err != nil {
 		return err
 	}
-	deliveryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	deliveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	delay := 100 * time.Millisecond
 	for {
@@ -98,7 +98,7 @@ func deliverEvents(ctx context.Context, cp ControlPlane, a controlplane.Assignme
 		}
 		return nil
 	}
-	deliveryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	deliveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	delay := 100 * time.Millisecond
 	for {

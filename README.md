@@ -91,7 +91,10 @@ Server URLs from the application, replaces any existing configuration after
 backing it up, and installs the user service. A Node configuration may include
 `servers` in preferred order. The Node stays on one route, switches on network
 or gateway failures, and periodically returns to the preferred route. Every URL
-must reach the same logical control plane and durable store.
+must reach the same logical control plane and durable store. Connection setup is
+bounded separately from the 60-second request deadline so an unavailable direct
+route can fail over quickly while a high-latency Tunnel still has enough time to
+return headers. Event delivery and terminal reports retry for up to 30 seconds.
 
 `--install-service` installs and starts a user-level system service:
 
