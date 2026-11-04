@@ -149,8 +149,8 @@ temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/relay-install.XXXXXX")
 trap 'rm -rf "$temporary_dir"' EXIT HUP INT TERM
 
 printf 'Downloading Relay for %s/%s...\n' "$target_os" "$target_arch"
-curl -fsSL --retry 3 --connect-timeout 25 -o "$temporary_dir/$asset" "$release_base/$asset"
-curl -fsSL --retry 3 --connect-timeout 25 -o "$temporary_dir/checksums.txt" "$release_base/checksums.txt"
+curl -fsSL --retry 3 --connect-timeout 15 -o "$temporary_dir/$asset" "$release_base/$asset"
+curl -fsSL --retry 3 --connect-timeout 15 -o "$temporary_dir/checksums.txt" "$release_base/checksums.txt"
 
 expected_checksum=$(awk -v name="$asset" '$2 == name || $2 == "*" name { print $1; exit }' "$temporary_dir/checksums.txt")
 [ -n "$expected_checksum" ] || fail "checksum for $asset was not found"
@@ -380,7 +380,7 @@ else
     escaped_claim_node=$(json_escape "$node_id")
     escaped_claim_name=$(json_escape "$node_name")
     claim_url="${steer_server_url%/}/relay-node-enrollments/claim"
-    claim_status=$(curl -sS --retry 2 --connect-timeout 25 -o "$temporary_dir/enrollment.txt" -w '%{http_code}' \
+    claim_status=$(curl -sS --retry 2 --connect-timeout 15 -o "$temporary_dir/enrollment.txt" -w '%{http_code}' \
       -H 'Accept: application/vnd.steer.relay-enrollment.v1+text' \
       -H 'Content-Type: application/json' \
       -d "{\"token\":\"${escaped_claim_token}\",\"nodeId\":\"${escaped_claim_node}\",\"name\":\"${escaped_claim_name}\",\"capacity\":${capacity}}" \
