@@ -81,18 +81,6 @@ curl -fsSL https://raw.githubusercontent.com/KDF5000/relay/main/install.sh \
 
 安装脚本支持 macOS/Linux 的 AMD64 和 ARM64。它会校验 Release 文件、将 `relay-node`、`relay-tool` 和 `relayctl` 安装到 `~/.local/bin`，从 `PATH` 自动发现 Runtime CLI，并把 Node 配置写入 `~/.config/relay/node.json`。
 
-集成 Relay 的应用可以提供一条命令完成接入：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/KDF5000/relay/main/install.sh \
-  | sh -s -- --enroll 'https://steer.example.com/api/v1#一次性令牌'
-```
-
-`--enroll` 会从应用领取稳定 Node ID、Node 专属凭证和有顺序的 Relay Server
-地址，备份并替换已有配置，然后安装用户服务。Node 配置可以用 `servers` 按优先级
-提供多个入口；Node 会保持使用当前入口，在网络或网关故障时切换，并定期恢复首选
-入口。所有地址必须指向同一个逻辑 Control Plane 和持久化存储。
-
 `--install-service` 会安装并启动用户级系统服务：
 
 - Linux：systemd user service

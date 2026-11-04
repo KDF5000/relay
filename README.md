@@ -79,20 +79,6 @@ curl -fsSL https://raw.githubusercontent.com/KDF5000/relay/main/install.sh \
 
 The installer supports macOS and Linux on AMD64 and ARM64. It verifies the release checksum, installs `relay-node`, `relay-tool`, and `relayctl` under `~/.local/bin`, discovers supported runtime CLIs from `PATH` (plus the CLIs bundled in `QoderWork.app` and `QwenWorkCN.app` on macOS), and writes the Node configuration to `~/.config/relay/node.json`. Discovered Codex, Trae, Claude Code, Pi, OpenCode, Qoder, and QwenWork runtimes default to non-ephemeral execution so Relay can preserve their native conversation threads across Runs.
 
-Applications integrating Relay can issue a one-command enrollment:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/KDF5000/relay/main/install.sh \
-  | sh -s -- --enroll 'https://steer.example.com/api/v1#one-time-token'
-```
-
-`--enroll` obtains the stable Node ID, scoped credential, and ordered Relay
-Server URLs from the application, replaces any existing configuration after
-backing it up, and installs the user service. A Node configuration may include
-`servers` in preferred order. The Node stays on one route, switches on network
-or gateway failures, and periodically returns to the preferred route. Every URL
-must reach the same logical control plane and durable store.
-
 `--install-service` installs and starts a user-level system service:
 
 - Linux: systemd user service

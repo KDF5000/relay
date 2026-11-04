@@ -10,7 +10,6 @@ data_dir="${RELAY_DATA_DIR:-${XDG_CACHE_HOME:-${HOME}/.cache}/relay}"
 server_url="${RELAY_SERVER_URL:-http://127.0.0.1:8787}"
 steer_server_url="${STEER_SERVER_URL:-}"
 enrollment_token="${STEER_ENROLLMENT_TOKEN:-}"
-enrollment_bundle=""
 node_id="${RELAY_NODE_ID:-}"
 node_name="${RELAY_NODE_NAME:-$(hostname 2>/dev/null || printf 'relay-node')}"
 capacity="${RELAY_NODE_CAPACITY:-2}"
@@ -28,7 +27,6 @@ Usage:
 
 Options:
   --server URL       Relay Server URL (default: http://127.0.0.1:8787)
-  --enroll URL#TOKEN One-command Steer enrollment; installs and starts the service
   --steer-server URL Steer API base URL used to enroll this Node
   --enrollment-token TOKEN
                      One-time Steer enrollment token
@@ -61,17 +59,6 @@ need_value() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --server) need_value "$@"; server_url=$2; shift 2 ;;
-    --enroll)
-      need_value "$@"
-      enrollment_bundle=$2
-      case "$enrollment_bundle" in
-        *#*) steer_server_url=${enrollment_bundle%%#*}; enrollment_token=${enrollment_bundle#*#} ;;
-        *) fail "--enroll must use URL#TOKEN" ;;
-      esac
-      force_config=1
-      install_service=1
-      shift 2
-      ;;
     --steer-server) need_value "$@"; steer_server_url=$2; shift 2 ;;
     --enrollment-token) need_value "$@"; enrollment_token=$2; shift 2 ;;
     --node-id) need_value "$@"; node_id=$2; shift 2 ;;
@@ -121,9 +108,7 @@ generate_node_id() {
   od -An -N16 -tx1 /dev/urandom | tr -d ' \n'
 }
 
-if [ -z "$node_id" ] && [ -z "$enrollment_token" ]; then
-  node_id="node_$(generate_node_id)"
-fi
+[ -n "$node_id" ] || node_id="node_$(generate_node_id)"
 
 case "$(uname -s)" in
   Darwin) target_os=darwin ;;
@@ -380,32 +365,11 @@ else
     escaped_claim_node=$(json_escape "$node_id")
     escaped_claim_name=$(json_escape "$node_name")
     claim_url="${steer_server_url%/}/relay-node-enrollments/claim"
-    claim_status=$(curl -sS --retry 2 --connect-timeout 15 -o "$temporary_dir/enrollment.txt" -w '%{http_code}' \
-      -H 'Accept: application/vnd.steer.relay-enrollment.v1+text' \
+    claim_status=$(curl -sS --retry 2 --connect-timeout 15 -o "$temporary_dir/enrollment.json" -w '%{http_code}' \
       -H 'Content-Type: application/json' \
       -d "{\"token\":\"${escaped_claim_token}\",\"nodeId\":\"${escaped_claim_node}\",\"name\":\"${escaped_claim_name}\",\"capacity\":${capacity}}" \
       "$claim_url") || fail "could not reach Steer enrollment endpoint"
-    [ "$claim_status" = "201" ] || fail "Steer enrollment failed (HTTP ${claim_status}): $(cat "$temporary_dir/enrollment.txt")"
-    first_line=$(sed -n '1p' "$temporary_dir/enrollment.txt")
-    [ "$first_line" = "relay-enrollment-v1" ] || fail "Steer returned an unsupported enrollment response"
-    server_urls_json=""
-    server_separator=""
-    tab=$(printf '\t')
-    while IFS="$tab" read -r key value; do
-      case "$key" in
-        node_id) node_id=$value ;;
-        node_token) node_token=$value ;;
-        server)
-          [ -n "$server_urls_json" ] || server_url=$value
-          escaped_enrollment_server=$(json_escape "$value")
-          server_urls_json="${server_urls_json}${server_separator}\"${escaped_enrollment_server}\""
-          server_separator=","
-          ;;
-      esac
-    done <"$temporary_dir/enrollment.txt"
-    [ -n "$node_id" ] || fail "Steer enrollment response did not include a Node ID"
-    [ -n "$node_token" ] || fail "Steer enrollment response did not include a Node credential"
-    [ -n "$server_urls_json" ] || fail "Steer enrollment response did not include a Relay Server URL"
+    [ "$claim_status" = "201" ] || fail "Steer enrollment failed (HTTP ${claim_status}): $(cat "$temporary_dir/enrollment.json")"
     printf 'Enrolled Relay Node %s with Steer.\n' "$node_name"
   fi
   config_dir=$(dirname "$config_file")
@@ -417,9 +381,6 @@ else
   fi
 
   escaped_server=$(json_escape "$server_url")
-  if [ -z "${server_urls_json:-}" ]; then
-    server_urls_json="\"${escaped_server}\""
-  fi
   escaped_node=$(json_escape "$node_id")
   escaped_install_dir=$(json_escape "$install_dir")
   escaped_data_dir=$(json_escape "$data_dir")
@@ -474,7 +435,6 @@ else
   cat >"$config_file" <<EOF
 {
   "server": "${escaped_server}",
-  "servers": [${server_urls_json}],
 ${token_line}
   "workspace_root": "${escaped_data_dir}/workspaces",
   "node": {
