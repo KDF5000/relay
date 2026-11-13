@@ -36,3 +36,24 @@ func TestRuntimeWithoutCatalogAcceptsModelOverride(t *testing.T) {
 		t.Fatal("runtime without a model catalog should defer validation to its provider")
 	}
 }
+
+func TestRuntimeMatchesEffortCapabilityAndModel(t *testing.T) {
+	runtime := controlplane.Runtime{ID: "node/codex", Provider: "codex", State: "healthy", SupportsReasoningEffort: true, DefaultModel: "gpt", ModelCatalog: []controlplane.RuntimeModel{{ID: "gpt", SupportedReasoningEfforts: []controlplane.ReasoningEffortOption{{Effort: "xhigh"}}}}}
+	request := relay.RuntimeRequirement{Provider: "codex", ReasoningEffort: "xhigh"}
+	if !controlplane.RuntimeMatches(runtime, request) {
+		t.Fatal("supported effort did not match")
+	}
+	request.ReasoningEffort = "max"
+	if controlplane.RuntimeMatches(runtime, request) {
+		t.Fatal("unsupported effort matched")
+	}
+	request.ReasoningEffort = "xhigh"
+	runtime.SupportsReasoningEffort = false
+	if controlplane.RuntimeMatches(runtime, request) {
+		t.Fatal("old node matched effort request")
+	}
+	request.ReasoningEffort = ""
+	if !controlplane.RuntimeMatches(runtime, request) {
+		t.Fatal("default request no longer matches old node")
+	}
+}

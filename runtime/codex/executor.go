@@ -59,6 +59,9 @@ type ForkOptions struct {
 }
 
 func ExecuteFork(ctx context.Context, config Config, execution relay.Execution, fork ForkOptions) (relay.Result, error) {
+	if execution.Runtime.ReasoningEffort != "" {
+		config.ReasoningEffort = execution.Runtime.ReasoningEffort
+	}
 	if execution.Runtime.Model != "" {
 		config.Model = execution.Runtime.Model
 	}

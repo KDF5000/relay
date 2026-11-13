@@ -190,7 +190,7 @@ read -r initialize
 printf '%s\n' '{"id":1,"result":{"userAgent":"fake"}}'
 read -r initialized
 read -r model_list
-printf '%s\n' '{"id":2,"result":{"data":[{"id":"model-a","model":"model-a","displayName":"Model A","description":"Fast model","hidden":false,"isDefault":true}],"nextCursor":null}}'
+printf '%s\n' '{"id":2,"result":{"data":[{"id":"model-a","model":"model-a","displayName":"Model A","description":"Fast model","hidden":false,"isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"xhigh","description":"Maximum"}],"defaultReasoningEffort":"medium","businessMetadata":{"load":{"load_percent":127}}}],"nextCursor":null}}'
 `
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ printf '%s\n' '{"id":2,"result":{"data":[{"id":"model-a","model":"model-a","disp
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 1 || models[0].ID != "model-a" || models[0].DisplayName != "Model A" || !models[0].Default {
+	if len(models) != 1 || len(models[0].SupportedReasoningEfforts) != 1 || models[0].SupportedReasoningEfforts[0].Effort != "xhigh" || models[0].DefaultReasoningEffort != "medium" || models[0].LoadPercent == nil || *models[0].LoadPercent != 127 || models[0].ID != "model-a" || models[0].DisplayName != "Model A" || !models[0].Default {
 		t.Fatalf("models = %#v", models)
 	}
 }
@@ -347,5 +347,61 @@ printf '%s\n' '{"method":"item/agentMessage/delta","params":{"delta":"partial ou
 	}
 	if partial != "partial output" {
 		t.Fatalf("partial output = %q", partial)
+	}
+}
+
+func TestTaskEffortReachesAppServerTurnIncludingResume(t *testing.T) {
+	for _, nativeSession := range []string{"", "native-thread"} {
+		t.Run("session-"+nativeSession, func(t *testing.T) {
+			dir := t.TempDir()
+			fake := filepath.Join(dir, "codex")
+			script := `#!/bin/sh
+[ "$1" = "app-server" ] || exit 8
+read -r initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read -r initialized
+read -r thread
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"native-thread"}}}'
+read -r turn
+case "$turn" in *'"effort":"xhigh"'*) ;; *) exit 40;; esac
+case "$turn" in *'"model":"selected-model"'*) ;; *) exit 41;; esac
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn"}}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"native-thread","turnId":"turn","itemId":"final","delta":"done"}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"native-thread","turn":{"id":"turn","status":"completed","items":[]}}}'
+`
+			if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			executor := runtimecodex.Executor{Config: runtimecodex.Config{Binary: fake, Protocol: "app-server", WorkRoot: dir, ReasoningEffort: "low"}}
+			result, err := executor.Execute(context.Background(), relay.Execution{RunID: "effort", RuntimeSessionID: nativeSession, Runtime: relay.RuntimeRequirement{Model: "selected-model", ReasoningEffort: "xhigh"}, Instructions: relay.CompiledInstructions{Prompt: "work"}, Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{})})
+			if err != nil || result.Summary != "done" {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestTaskEffortReachesExecArguments(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+out=""
+effort=""
+while [ "$#" -gt 0 ]; do
+ if [ "$1" = "--output-last-message" ]; then out="$2"; shift 2; continue; fi
+ if [ "$1" = "--config" ]; then effort="$2"; shift 2; continue; fi
+ shift
+done
+[ "$effort" = 'model_reasoning_effort="xhigh"' ] || exit 42
+cat >/dev/null
+printf '%s' 'done' > "$out"
+`
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executor := runtimecodex.Executor{Config: runtimecodex.Config{Binary: fake, WorkRoot: dir, ReasoningEffort: "low"}}
+	result, err := executor.Execute(context.Background(), relay.Execution{RunID: "effort", Runtime: relay.RuntimeRequirement{ReasoningEffort: "xhigh"}, Instructions: relay.CompiledInstructions{Prompt: "work"}, Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{})})
+	if err != nil || result.Summary != "done" {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

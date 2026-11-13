@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestProbeRuntimeAdvertisesModels(t *testing.T) {
@@ -112,5 +113,41 @@ func TestQoderVariantsAdvertisedAtRegistration(t *testing.T) {
 		if got.State != "healthy" || got.Version != "1.1.71" || len(got.ModelCatalog) != 3 || got.DefaultModel != "Auto" || got.Models[2] != "mode-1" {
 			t.Fatalf("%s registration = %+v", test.provider, got)
 		}
+	}
+}
+
+func TestCompatibleCatalogRefreshKeepsLoadTimestampAndReplacesModels(t *testing.T) {
+	command := filepath.Join(t.TempDir(), "traex")
+	script := `#!/bin/sh
+if [ "$1" = '--version' ]; then echo 'traex 1.0.0'; exit 0; fi
+read -r initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read -r initialized
+read -r models
+printf '%s\n' '{"id":2,"result":{"data":[{"id":"gpt","model":"gpt","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"high"}],"defaultReasoningEffort":"high","businessMetadata":{"load":{"load_percent":0}}}],"nextCursor":null}}'
+`
+	if err := os.WriteFile(command, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	item := runtimeConfig{Kind: "trae", Provider: "trae", Command: command}
+	discoverRuntimeModels(&item, "trae")
+	if item.DetectedAt == nil || len(item.DetectedModels) != 1 || item.DetectedModels[0].LoadPercent == nil || *item.DetectedModels[0].LoadPercent != 0 {
+		t.Fatalf("missing model snapshot: %+v", item)
+	}
+	original := *item.DetectedAt
+	discoverRuntimeModels(&item, "trae")
+	if len(item.DetectedModels) != 1 {
+		t.Fatal("refresh duplicated the model list")
+	}
+	registered := probeRuntime(item)
+	if registered.ModelCatalogCheckedAt == nil || !registered.ModelCatalogCheckedAt.Equal(*item.DetectedAt) || !registered.SupportsReasoningEffort || len(registered.ModelCatalog[0].SupportedReasoningEfforts) != 1 {
+		t.Fatalf("registration lost metadata: %+v", registered)
+	}
+	item.Command = filepath.Join(t.TempDir(), "missing")
+	item.LastModelProbe = time.Now().Add(-2 * time.Minute)
+	lastSuccess := *item.DetectedAt
+	refreshModelCatalog(&item)
+	if !item.DetectedAt.Equal(lastSuccess) || item.DetectedAt.Before(original) || len(item.DetectedModels) != 1 {
+		t.Fatal("failed discovery refreshed stale load or lost usable catalog")
 	}
 }

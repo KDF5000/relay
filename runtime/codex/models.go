@@ -9,11 +9,19 @@ import (
 )
 
 // ModelInfo is the model metadata exposed by a Codex-compatible app server.
+type ReasoningEffortOption struct {
+	Effort      string `json:"reasoningEffort"`
+	Description string `json:"description"`
+}
+
 type ModelInfo struct {
-	ID          string
-	DisplayName string
-	Description string
-	Default     bool
+	SupportedReasoningEfforts []ReasoningEffortOption
+	DefaultReasoningEffort    string
+	LoadPercent               *float64
+	ID                        string
+	DisplayName               string
+	Description               string
+	Default                   bool
 }
 
 // ProbeModels reads the visible model catalog from a Codex-compatible app server.
@@ -77,12 +85,26 @@ func ProbeModels(ctx context.Context, config Config, fork ForkOptions) ([]ModelI
 		}
 		var response struct {
 			Data []struct {
-				ID          string `json:"id"`
-				Model       string `json:"model"`
-				DisplayName string `json:"displayName"`
-				Description string `json:"description"`
-				Hidden      bool   `json:"hidden"`
-				Default     bool   `json:"isDefault"`
+				ID                        string                  `json:"id"`
+				Model                     string                  `json:"model"`
+				DisplayName               string                  `json:"displayName"`
+				Description               string                  `json:"description"`
+				Hidden                    bool                    `json:"hidden"`
+				Default                   bool                    `json:"isDefault"`
+				SupportedReasoningEfforts []ReasoningEffortOption `json:"supportedReasoningEfforts"`
+				DefaultReasoningEffort    string                  `json:"defaultReasoningEffort"`
+				BusinessMetadata          struct {
+					Load struct {
+						Percent *float64 `json:"load_percent"`
+					} `json:"load"`
+				} `json:"businessMetadata"`
+				Meta struct {
+					Trae struct {
+						Load struct {
+							Percent *float64 `json:"percent"`
+						} `json:"load"`
+					} `json:"trae"`
+				} `json:"_meta"`
 			} `json:"data"`
 			NextCursor *string `json:"nextCursor"`
 		}
@@ -97,7 +119,11 @@ func ProbeModels(ctx context.Context, config Config, fork ForkOptions) ([]ModelI
 			if modelID == "" || item.Hidden {
 				continue
 			}
-			models = append(models, ModelInfo{ID: modelID, DisplayName: item.DisplayName, Description: item.Description, Default: item.Default})
+			load := item.BusinessMetadata.Load.Percent
+			if load == nil {
+				load = item.Meta.Trae.Load.Percent
+			}
+			models = append(models, ModelInfo{ID: modelID, DisplayName: item.DisplayName, Description: item.Description, Default: item.Default, SupportedReasoningEfforts: item.SupportedReasoningEfforts, DefaultReasoningEffort: item.DefaultReasoningEffort, LoadPercent: load})
 		}
 		if response.NextCursor == nil || *response.NextCursor == "" {
 			break

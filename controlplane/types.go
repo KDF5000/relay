@@ -9,22 +9,32 @@ import (
 )
 
 type Runtime struct {
-	ID           string         `json:"id"`
-	Provider     string         `json:"provider"`
-	Version      string         `json:"version,omitempty"`
-	State        string         `json:"state,omitempty"`
-	Message      string         `json:"message,omitempty"`
-	DefaultModel string         `json:"default_model,omitempty"`
-	Models       []string       `json:"models,omitempty"`
-	ModelCatalog []RuntimeModel `json:"model_catalog,omitempty"`
-	CheckedAt    *time.Time     `json:"checked_at,omitempty"`
+	ModelCatalogCheckedAt   *time.Time     `json:"model_catalog_checked_at,omitempty"`
+	SupportsReasoningEffort bool           `json:"supports_reasoning_effort,omitempty"`
+	ID                      string         `json:"id"`
+	Provider                string         `json:"provider"`
+	Version                 string         `json:"version,omitempty"`
+	State                   string         `json:"state,omitempty"`
+	Message                 string         `json:"message,omitempty"`
+	DefaultModel            string         `json:"default_model,omitempty"`
+	Models                  []string       `json:"models,omitempty"`
+	ModelCatalog            []RuntimeModel `json:"model_catalog,omitempty"`
+	CheckedAt               *time.Time     `json:"checked_at,omitempty"`
+}
+
+type ReasoningEffortOption struct {
+	Effort      string `json:"effort"`
+	Description string `json:"description,omitempty"`
 }
 
 type RuntimeModel struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name,omitempty"`
-	Description string `json:"description,omitempty"`
-	Default     bool   `json:"default,omitempty"`
+	SupportedReasoningEfforts []ReasoningEffortOption `json:"supported_reasoning_efforts,omitempty"`
+	DefaultReasoningEffort    string                  `json:"default_reasoning_effort,omitempty"`
+	LoadPercent               *float64                `json:"load_percent,omitempty"`
+	ID                        string                  `json:"id"`
+	DisplayName               string                  `json:"display_name,omitempty"`
+	Description               string                  `json:"description,omitempty"`
+	Default                   bool                    `json:"default,omitempty"`
 }
 
 func RuntimeMatches(runtime Runtime, requirement relay.RuntimeRequirement) bool {
@@ -40,6 +50,27 @@ func RuntimeMatches(runtime Runtime, requirement relay.RuntimeRequirement) bool 
 			modelAvailable = modelAvailable || model == requirement.Model
 		}
 		if !modelAvailable {
+			return false
+		}
+	}
+	if requirement.ReasoningEffort != "" {
+		if !runtime.SupportsReasoningEffort {
+			return false
+		}
+		model := requirement.Model
+		if model == "" {
+			model = runtime.DefaultModel
+		}
+		supported := false
+		for _, item := range runtime.ModelCatalog {
+			if item.ID != model {
+				continue
+			}
+			for _, option := range item.SupportedReasoningEfforts {
+				supported = supported || option.Effort == requirement.ReasoningEffort
+			}
+		}
+		if !supported {
 			return false
 		}
 	}

@@ -72,11 +72,12 @@ type RetryPolicy struct {
 }
 
 type RuntimeRequirement struct {
-	ID       string            `json:"id,omitempty"`
-	Provider string            `json:"provider"`
-	Model    string            `json:"model,omitempty"`
-	Version  string            `json:"version,omitempty"`
-	Labels   map[string]string `json:"labels,omitempty"`
+	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
+	ID              string            `json:"id,omitempty"`
+	Provider        string            `json:"provider"`
+	Model           string            `json:"model,omitempty"`
+	Version         string            `json:"version,omitempty"`
+	Labels          map[string]string `json:"labels,omitempty"`
 }
 
 type Source struct {

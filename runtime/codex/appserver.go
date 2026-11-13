@@ -175,7 +175,14 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 	for _, imagePath := range imagePaths {
 		turnInput = append(turnInput, map[string]string{"type": "localImage", "path": imagePath})
 	}
-	if err := writeRequest(map[string]any{"id": turnRequestID, "method": "turn/start", "params": map[string]any{"threadId": threadID, "input": turnInput}}); err != nil {
+	turnParams := map[string]any{"threadId": threadID, "input": turnInput}
+	if config.Model != "" {
+		turnParams["model"] = config.Model
+	}
+	if config.ReasoningEffort != "" {
+		turnParams["effort"] = config.ReasoningEffort
+	}
+	if err := writeRequest(map[string]any{"id": turnRequestID, "method": "turn/start", "params": turnParams}); err != nil {
 		return relay.Result{}, err
 	}
 

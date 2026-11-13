@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -66,6 +67,8 @@ type runtimeConfig struct {
 	IgnoreUserConfig bool                        `json:"ignore_user_config,omitempty"`
 	IgnoreRules      bool                        `json:"ignore_rules,omitempty"`
 	DetectedModels   []controlplane.RuntimeModel `json:"-"`
+	DetectedAt       *time.Time                  `json:"-"`
+	LastModelProbe   time.Time                   `json:"-"`
 	DetectedDefault  string                      `json:"-"`
 }
 type bindingConfig struct {
@@ -238,6 +241,29 @@ func main() {
 	if err := outbox.Recover(executionCtx, client, func(message string) { log.Print(message) }); err != nil {
 		log.Fatalf("outbox recovery failed; pending events retained: %v", err)
 	}
+	// Model probes can wait on provider APIs. Publish immutable snapshots in a
+	// separate loop so discovery never delays registration heartbeats.
+	var modelConfigs atomic.Pointer[[]runtimeConfig]
+	modelConfigs.Store(&cfg.Runtimes)
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-executionCtx.Done():
+				return
+			case <-ticker.C:
+				next := append([]runtimeConfig(nil), (*modelConfigs.Load())...)
+				for index := range next {
+					if executionCtx.Err() != nil {
+						return
+					}
+					refreshModelCatalog(&next[index])
+				}
+				modelConfigs.Store(&next)
+			}
+		}
+	}()
 	go func() {
 		ticker := time.NewTicker(*heartbeat)
 		defer ticker.Stop()
@@ -247,7 +273,7 @@ func main() {
 				return
 			case <-ticker.C:
 				cfg.Node.Runtimes = nil
-				for _, item := range cfg.Runtimes {
+				for _, item := range *modelConfigs.Load() {
 					cfg.Node.Runtimes = append(cfg.Node.Runtimes, probeRuntime(item))
 				}
 				worker.Registration.Runtimes = cfg.Node.Runtimes
@@ -305,7 +331,10 @@ func probeRuntime(item runtimeConfig) controlplane.Runtime {
 	if defaultModel == "" {
 		defaultModel = item.DetectedDefault
 	}
-	result := controlplane.Runtime{ID: item.ID, Provider: item.Provider, Version: item.Version, State: "healthy", DefaultModel: defaultModel, Models: append([]string(nil), item.Models...), ModelCatalog: append([]controlplane.RuntimeModel(nil), item.DetectedModels...), CheckedAt: &now}
+	result := controlplane.Runtime{SupportsReasoningEffort: item.Kind == "codex" || (item.Kind == "" && item.Provider == "codex") || isTrae(item), ID: item.ID, Provider: item.Provider, Version: item.Version, State: "healthy", DefaultModel: defaultModel, Models: append([]string(nil), item.Models...), ModelCatalog: append([]controlplane.RuntimeModel(nil), item.DetectedModels...), CheckedAt: &now}
+	if item.DetectedAt != nil {
+		result.ModelCatalogCheckedAt = item.DetectedAt
+	}
 	for _, model := range item.DetectedModels {
 		if !contains(result.Models, model.ID) {
 			result.Models = append(result.Models, model.ID)
@@ -396,7 +425,19 @@ func probeRuntime(item runtimeConfig) controlplane.Runtime {
 	return result
 }
 
+func refreshModelCatalog(item *runtimeConfig) {
+	if time.Since(item.LastModelProbe) < time.Minute {
+		return
+	}
+	if isTrae(*item) {
+		discoverRuntimeModels(item, "trae")
+	} else if item.Kind == "codex" || (item.Kind == "" && item.Provider == "codex") {
+		discoverRuntimeModels(item, "codex")
+	}
+}
+
 func discoverRuntimeModels(item *runtimeConfig, kind string) {
+	item.LastModelProbe = time.Now().UTC()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	var (
@@ -420,8 +461,16 @@ func discoverRuntimeModels(item *runtimeConfig, kind string) {
 		log.Printf("Relay %s model discovery unavailable: %v", item.Provider, err)
 		return
 	}
+	now := time.Now().UTC()
+	item.DetectedAt = &now
+	item.DetectedModels = nil
+	item.DetectedDefault = ""
 	for _, model := range models {
-		item.DetectedModels = append(item.DetectedModels, controlplane.RuntimeModel{ID: model.ID, DisplayName: model.DisplayName, Description: model.Description, Default: model.Default})
+		options := make([]controlplane.ReasoningEffortOption, 0, len(model.SupportedReasoningEfforts))
+		for _, option := range model.SupportedReasoningEfforts {
+			options = append(options, controlplane.ReasoningEffortOption{Effort: option.Effort, Description: option.Description})
+		}
+		item.DetectedModels = append(item.DetectedModels, controlplane.RuntimeModel{ID: model.ID, DisplayName: model.DisplayName, Description: model.Description, Default: model.Default, SupportedReasoningEfforts: options, DefaultReasoningEffort: model.DefaultReasoningEffort, LoadPercent: model.LoadPercent})
 		if model.Default {
 			item.DetectedDefault = model.ID
 		}
