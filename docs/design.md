@@ -484,6 +484,25 @@ text block 映射为 `assistant.message.completed`，thinking block 不输出；
 `allowed_tools` / `disallowed_tools`，权限策略由 Qoder 设置或 `args` 中的
 `--permission-mode` 决定。
 
+### 10.6 Antigravity CLI
+
+Antigravity CLI（`agy`）使用 provider / kind `antigravity`，kind 也接受 `agy`。
+Adapter 通过 `--input-format stream-json --output-format stream-json` 在 stdin 发送一条
+`user` 文本消息后关闭输入，每个进程只执行一轮。`step_update` 中
+`agent_response.text_delta` 映射为 `assistant.message.delta`；必须收到 `result` 且
+`status=SUCCESS`、进程正常退出，才返回最终回答。
+
+`--conversation` 续接原生会话。CLI 找不到会话时会静默新建，所以 Adapter 等待 `init`
+并核对 `conversation_id` 后才发送 Prompt；不匹配时终止空会话进程，用完整历史的
+recovery prompt 重建，没有 recovery prompt 则报错。`ephemeral` 每次新建会话并省略
+返回的会话 ID，CLI 仍可能本地保存。
+
+指令写入 `AGENTS.md`；`agy models` 的 tab 分隔输出用于模型发现，默认模型只来自 Node
+显式配置。Node 与 Request 均支持 `model` 和 `reasoning_effort`（CLI `--effort`）。权限
+沿用 CLI 设置或 Node `args`，不接受 `allowed_tools` / `disallowed_tools`；stdin 仅支持文本，
+图片附件明确报错。复用受限环境、Tool Bridge、声明式 Artifact 和进程监管，Prompt
+关闭 slash command 展开。
+
 ## 11. 指令模型
 
 指令按作用域分为：
@@ -543,6 +562,7 @@ relay/
 ├── runtime/claude/           Claude Code headless Adapter
 ├── runtime/pi/               Pi JSON mode Adapter
 ├── runtime/opencode/         OpenCode JSON mode Adapter
+├── runtime/antigravity/      Antigravity CLI NDJSON Adapter
 ├── runtime/qoder/            Qoder / 千问办公 stream-json Adapter
 ├── sdk/                      业务项目 SDK
 ├── transport/httpapi/        当前 Host/Node 网络协议

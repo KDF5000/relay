@@ -1,4 +1,4 @@
-.PHONY: fmt test vet installer-check verify demo codex-smoke trae-smoke build-tools build-relayctl codex-capability-smoke server-up server-down db-up db-down postgres-test clean
+.PHONY: fmt test vet installer-check verify demo codex-smoke trae-smoke antigravity-smoke build-tools build-relayctl codex-capability-smoke server-up server-down db-up db-down postgres-test clean
 
 fmt:
 	GOCACHE=/private/tmp/relay-go-cache go fmt ./...
@@ -23,6 +23,9 @@ codex-smoke:
 
 trae-smoke:
 	GOCACHE=/private/tmp/relay-go-cache go run ./cmd/relay-trae-smoke
+
+antigravity-smoke:
+	RELAY_ANTIGRAVITY_SMOKE=1 GOCACHE=/private/tmp/relay-go-cache go test ./runtime/antigravity -run TestLocalCLI -count=1 -v
 
 build-tools:
 	mkdir -p bin

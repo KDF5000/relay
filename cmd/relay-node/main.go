@@ -21,6 +21,7 @@ import (
 	"github.com/KDF5000/relay/controlplane"
 	"github.com/KDF5000/relay/node"
 	runtimeagentcli "github.com/KDF5000/relay/runtime/agentcli"
+	runtimeantigravity "github.com/KDF5000/relay/runtime/antigravity"
 	runtimeclaude "github.com/KDF5000/relay/runtime/claude"
 	runtimecodex "github.com/KDF5000/relay/runtime/codex"
 	runtimecommand "github.com/KDF5000/relay/runtime/command"
@@ -183,6 +184,17 @@ func main() {
 			}
 			discoverRuntimeModels(item, "opencode")
 			executors[item.Provider] = runtimeopencode.Executor{Config: agentConfig(*item)}
+		} else if isAntigravity(*item) {
+			if item.Command == "" {
+				item.Command = runtimeantigravity.ResolveBinary("")
+			}
+			if item.Version == "" {
+				if detected, probeErr := runtimeantigravity.ProbeVersion(context.Background(), item.Command); probeErr == nil {
+					item.Version = detected
+				}
+			}
+			discoverRuntimeModels(item, "antigravity")
+			executors[item.Provider] = runtimeantigravity.Executor{Config: antigravityConfig(*item)}
 		} else if variant, ok := qoderVariant(*item); ok {
 			if item.Command == "" {
 				item.Command = runtimeqoder.ResolveBinary(variant, "")
@@ -331,7 +343,7 @@ func probeRuntime(item runtimeConfig) controlplane.Runtime {
 	if defaultModel == "" {
 		defaultModel = item.DetectedDefault
 	}
-	result := controlplane.Runtime{SupportsReasoningEffort: item.Kind == "codex" || (item.Kind == "" && item.Provider == "codex") || isTrae(item), ID: item.ID, Provider: item.Provider, Version: item.Version, State: "healthy", DefaultModel: defaultModel, Models: append([]string(nil), item.Models...), ModelCatalog: append([]controlplane.RuntimeModel(nil), item.DetectedModels...), CheckedAt: &now}
+	result := controlplane.Runtime{SupportsReasoningEffort: item.Kind == "codex" || (item.Kind == "" && item.Provider == "codex") || isTrae(item) || isAntigravity(item), ID: item.ID, Provider: item.Provider, Version: item.Version, State: "healthy", DefaultModel: defaultModel, Models: append([]string(nil), item.Models...), ModelCatalog: append([]controlplane.RuntimeModel(nil), item.DetectedModels...), CheckedAt: &now}
 	if item.DetectedAt != nil {
 		result.ModelCatalogCheckedAt = item.DetectedAt
 	}
@@ -408,6 +420,16 @@ func probeRuntime(item runtimeConfig) controlplane.Runtime {
 		}
 		return result
 	}
+	if isAntigravity(item) {
+		version, err := runtimeantigravity.ProbeVersion(context.Background(), item.Command)
+		if err != nil {
+			result.State = "unhealthy"
+			result.Message = err.Error()
+		} else {
+			result.Version = version
+		}
+		return result
+	}
 	if variant, ok := qoderVariant(item); ok {
 		version, err := runtimeqoder.ProbeVersion(context.Background(), runtimeqoder.ResolveBinary(variant, item.Command))
 		if err != nil {
@@ -429,7 +451,9 @@ func refreshModelCatalog(item *runtimeConfig) {
 	if time.Since(item.LastModelProbe) < time.Minute {
 		return
 	}
-	if isTrae(*item) {
+	if isAntigravity(*item) {
+		discoverRuntimeModels(item, "antigravity")
+	} else if isTrae(*item) {
 		discoverRuntimeModels(item, "trae")
 	} else if item.Kind == "codex" || (item.Kind == "" && item.Provider == "codex") {
 		discoverRuntimeModels(item, "codex")
@@ -444,7 +468,9 @@ func discoverRuntimeModels(item *runtimeConfig, kind string) {
 		models []runtimecodex.ModelInfo
 		err    error
 	)
-	if kind == "opencode" {
+	if kind == "antigravity" {
+		models, err = runtimeantigravity.ProbeModels(ctx, antigravityConfig(*item))
+	} else if kind == "opencode" {
 		models, err = runtimeopencode.ProbeModels(ctx, agentConfig(*item))
 	} else if kind == "qoder" {
 		models, err = runtimeqoder.ProbeModels(ctx, agentConfig(*item), runtimeqoder.Qoder)
@@ -529,4 +555,12 @@ func compatibleConfig(item runtimeConfig) runtimecodex.Config {
 
 func agentConfig(item runtimeConfig) runtimeagentcli.Config {
 	return runtimeagentcli.Config{Binary: item.Command, ToolDir: item.ToolDir, PassEnv: item.PassEnv, Env: item.Env, Model: item.Model, WorkRoot: item.WorkRoot, Ephemeral: item.Ephemeral, AllowedTools: item.AllowedTools, DisallowedTools: item.DisallowedTools, ExtraArgs: item.Args}
+}
+
+func isAntigravity(item runtimeConfig) bool {
+	return item.Kind == "antigravity" || item.Kind == "agy" || (item.Kind == "" && (item.Provider == "antigravity" || item.Provider == "agy"))
+}
+
+func antigravityConfig(item runtimeConfig) runtimeantigravity.Config {
+	return runtimeantigravity.Config{Config: agentConfig(item), ReasoningEffort: item.ReasoningEffort}
 }

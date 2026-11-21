@@ -31,7 +31,7 @@ func TestProbeRuntimeSupportsNativeAgentCLIs(t *testing.T) {
 	dir := t.TempDir()
 	for _, test := range []struct {
 		name, version string
-	}{{"claude", "2.1.30"}, {"pi", "0.55.1"}, {"opencode", "2.0.32"}, {"qoder", "1.1.26"}, {"qwenwork", "1.1.71"}} {
+	}{{"claude", "2.1.30"}, {"pi", "0.55.1"}, {"opencode", "2.0.32"}, {"qoder", "1.1.26"}, {"qwenwork", "1.1.71"}, {"antigravity", "1.5.13"}} {
 		command := filepath.Join(dir, test.name)
 		if err := os.WriteFile(command, []byte("#!/bin/sh\necho '"+test.name+" "+test.version+"'\n"), 0o755); err != nil {
 			t.Fatal(err)
@@ -149,5 +149,24 @@ printf '%s\n' '{"id":2,"result":{"data":[{"id":"gpt","model":"gpt","isDefault":t
 	refreshModelCatalog(&item)
 	if !item.DetectedAt.Equal(lastSuccess) || item.DetectedAt.Before(original) || len(item.DetectedModels) != 1 {
 		t.Fatal("failed discovery refreshed stale load or lost usable catalog")
+	}
+}
+
+func TestAntigravityDiscoveryAndEffort(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture")
+	}
+	command := filepath.Join(t.TempDir(), "agy")
+	script := "#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo '1.5.13'; exit 0; fi\nprintf 'gemini-test\\tGemini Test\\nclaude-test\\tClaude Test\\n'\n"
+	if err := os.WriteFile(command, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"antigravity", "agy", ""} {
+		item := runtimeConfig{Kind: kind, Provider: "antigravity", Command: command, Model: "claude-test", ReasoningEffort: "medium"}
+		discoverRuntimeModels(&item, "antigravity")
+		got := probeRuntime(item)
+		if !isAntigravity(item) || got.State != "healthy" || got.Version != "1.5.13" || len(got.Models) != 2 || got.DefaultModel != "claude-test" || !got.SupportsReasoningEffort || antigravityConfig(item).ReasoningEffort != "medium" {
+			t.Fatalf("registration=%+v", got)
+		}
 	}
 }
