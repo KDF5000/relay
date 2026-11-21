@@ -38,6 +38,7 @@ type Request struct {
 	Runtime        RuntimeRequirement `json:"runtime"`
 	Source         Source             `json:"source"`
 	Input          Input              `json:"input"`
+	Skills         []SkillPackage     `json:"skills,omitempty"`
 	Instructions   InstructionBundle  `json:"instructions,omitempty"`
 	Context        []ContextItem      `json:"context,omitempty"`
 	Capabilities   []CapabilityGrant  `json:"capabilities,omitempty"`

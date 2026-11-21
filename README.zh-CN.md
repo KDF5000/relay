@@ -383,3 +383,25 @@ Web Agent Playground 内嵌在 Server 二进制中。修改 `transport/httpapi/c
 
 Host 产品可以通过 Binding 暴露自己的 Capability，而 Relay Core 不理解具体业务语义。
 下一款用于产品级验证的应用会与 Relay Core 分开设计。
+
+## 执行节点上的完整 Skill
+
+任务 `Request.skills` 携带完整文件快照：`id`、`name`、内容版本 `version`
+及 `files`（`path`、`content`、`encoding`、`executable`）。使用
+`relay.SkillVersion` 生成内容版本。Relay 校验相对路径、重复路径、必需的
+`SKILL.md` 和内容摘要。每个 Skill 最多 200 个文件、8 MiB 解码内容；
+单个任务的 Skill 总计最多 160 MiB。建议用 base64 编码文件，避免 JSON
+转义放大体积。任务提交和任务领取支持 256 MiB；续租等控制请求不重复传文件包。
+
+新版 Node 自动声明 `relay.skills=1`；带 Skill 的任务只派给支持的节点。
+需要先升级 Relay Server 和执行 Node。执行前，Node 将版本安装到
+`~/.cache/relay/skills/<工作区和Skill摘要>/<内容版本>/bundle/`，并把实际
+`SKILL.md` 的绝对路径加入 Agent 指令。所有 Runtime 共用这条准备链路。
+可用 `node.json` 的 `skill_cache_root` 修改持久化缓存路径；本地 SDK
+执行可用 `relay.Options.SkillCacheRoot` 配置。
+
+版本包含文件路径、解码内容与可执行标记，文件排序和保存时间不影响版本。
+相同版本直接复用，不重写文件；新版本在临时目录完整写入后原子发布，旧版本
+保留供运行中的任务访问。安装失败时任务在启动 Agent 前失败。文件包仍随提交
+和领取任务传输，目前优化的是磁盘安装。旧版本暂不自动清理，请仅在没有运行中
+任务引用时手动清理缓存。

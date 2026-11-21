@@ -448,7 +448,11 @@ func (h *Handler) acknowledgeCancellation(w http.ResponseWriter, r *http.Request
 }
 
 func decode(w http.ResponseWriter, r *http.Request, target any) bool {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20))
+	limit := int64(8 << 20)
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/runs" {
+		limit = 256 << 20
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

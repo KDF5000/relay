@@ -57,6 +57,7 @@ type Worker struct {
 	Executors      ExecutorResolver
 	Compiler       relay.InstructionCompiler
 	Workspaces     workspace.Provider
+	SkillCacheRoot string
 	Outbox         *Outbox
 	inspectionDirs sync.Map
 	capacity       atomic.Int64
@@ -175,7 +176,13 @@ func (w *Worker) Register(ctx context.Context) (controlplane.Node, error) {
 			w.Registration.Capabilities = append(w.Registration.Capabilities, controlplane.Capability{Name: descriptor.Name, Version: descriptor.Version, Kind: descriptor.Kind})
 		}
 	}
-	return w.ControlPlane.RegisterNode(ctx, w.Registration)
+	registration := w.Registration
+	registration.Labels = make(map[string]string, len(w.Registration.Labels)+1)
+	for k, v := range w.Registration.Labels {
+		registration.Labels[k] = v
+	}
+	registration.Labels[relay.SkillSupportLabel] = relay.SkillSupportVersion
+	return w.ControlPlane.RegisterNode(ctx, registration)
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
@@ -278,6 +285,14 @@ func (w *Worker) RunOnce(ctx context.Context) (relay.Run, error) {
 		compiler = relay.DefaultInstructionCompiler{}
 	}
 	instructions := assignment.Request.Instructions
+	skillFragments, err := relay.InstallSkills(executionCtx, w.SkillCacheRoot, assignment.Request.TenantID, assignment.Request.Skills)
+	if err != nil {
+		return failRun(err)
+	}
+	instructions.Agent = append(append([]relay.InstructionFragment(nil), instructions.Agent...), skillFragments...)
+	// Native sessions may retain earlier system instructions. Include current
+	// snapshot locations in every turn, including continuation prompts.
+	instructions.Turn = append(append([]relay.InstructionFragment(nil), instructions.Turn...), skillFragments...)
 	if len(assignment.Request.Capabilities) > 0 {
 		instructions.Runtime = append(append([]relay.InstructionFragment(nil), instructions.Runtime...), relay.CapabilityToolInstruction(assignment.Request.Capabilities))
 	}

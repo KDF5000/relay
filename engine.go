@@ -9,19 +9,21 @@ import (
 )
 
 type Options struct {
-	Executor     Executor
-	Capabilities CapabilityProvider
-	Store        Store
-	Observer     Observer
-	Compiler     InstructionCompiler
+	Executor       Executor
+	Capabilities   CapabilityProvider
+	Store          Store
+	Observer       Observer
+	SkillCacheRoot string
+	Compiler       InstructionCompiler
 }
 
 type Engine struct {
-	executor     Executor
-	capabilities CapabilityProvider
-	store        Store
-	observer     Observer
-	compiler     InstructionCompiler
+	executor       Executor
+	capabilities   CapabilityProvider
+	store          Store
+	observer       Observer
+	skillCacheRoot string
+	compiler       InstructionCompiler
 }
 
 func New(options Options) (*Engine, error) {
@@ -36,7 +38,7 @@ func New(options Options) (*Engine, error) {
 	}
 	return &Engine{
 		executor: options.Executor, capabilities: options.Capabilities,
-		store: options.Store, observer: options.Observer, compiler: options.Compiler,
+		skillCacheRoot: options.SkillCacheRoot, store: options.Store, observer: options.Observer, compiler: options.Compiler,
 	}, nil
 }
 
@@ -61,7 +63,16 @@ func (e *Engine) Execute(ctx context.Context, request Request) (Run, error) {
 	}
 	e.emit(ctx, run, "run.created", map[string]any{"status": RunQueued})
 
-	compiled, err := e.compiler.Compile(request.Input, request.Instructions)
+	fragments, err := InstallSkills(ctx, e.skillCacheRoot, request.TenantID, request.Skills)
+	if err != nil {
+		return e.fail(ctx, run, err)
+	}
+	instructions := request.Instructions
+	instructions.Agent = append(append([]InstructionFragment(nil), instructions.Agent...), fragments...)
+	// Native sessions may retain earlier system instructions. Include current
+	// snapshot locations in every turn, including continuation prompts.
+	instructions.Turn = append(append([]InstructionFragment(nil), instructions.Turn...), fragments...)
+	compiled, err := e.compiler.Compile(request.Input, instructions)
 	if err != nil {
 		return e.fail(ctx, run, fmt.Errorf("compile instructions: %w", err))
 	}
@@ -146,6 +157,9 @@ func (e *Engine) emit(ctx context.Context, run Run, eventType string, value any)
 func validateRequest(request Request) error {
 	if request.AgentID == "" || request.IdempotencyKey == "" || request.Input.Prompt == "" {
 		return errors.New("relay: agent ID, idempotency key, and input prompt are required")
+	}
+	if err := ValidateSkills(request.Skills); err != nil {
+		return err
 	}
 	if _, err := InputImages(request.Input); err != nil {
 		return err

@@ -102,7 +102,7 @@ func (c *Client) ResolveInteraction(ctx context.Context, id string, response jso
 }
 func (c *Client) CreateInteraction(ctx context.Context, a controlplane.Assignment, request relay.InteractionRequest) (relay.Interaction, error) {
 	var out relay.Interaction
-	err := c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(a.AttemptID)+"/interactions", map[string]any{"assignment": a, "request": request}, &out)
+	err := c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(a.AttemptID)+"/interactions", map[string]any{"assignment": leaseAssignment(a), "request": request}, &out)
 	return out, err
 }
 func (c *Client) GetInteraction(ctx context.Context, a controlplane.Assignment, id string) (relay.Interaction, error) {
@@ -197,11 +197,11 @@ func (c *Client) UploadArtifact(ctx context.Context, assignment controlplane.Ass
 }
 func (c *Client) ReserveCapability(ctx context.Context, a controlplane.Assignment, key, hash string, request relay.CapabilityRequest) (relay.CapabilityReservation, error) {
 	var out relay.CapabilityReservation
-	err := c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(a.AttemptID)+"/capability-calls/reserve", map[string]any{"assignment": a, "idempotency_key": key, "request_hash": hash, "request": request}, &out)
+	err := c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(a.AttemptID)+"/capability-calls/reserve", map[string]any{"assignment": leaseAssignment(a), "idempotency_key": key, "request_hash": hash, "request": request}, &out)
 	return out, err
 }
 func (c *Client) FinishCapability(ctx context.Context, a controlplane.Assignment, reservation relay.CapabilityReservation, result relay.CapabilityResult, cause string) error {
-	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(a.AttemptID)+"/capability-calls/"+url.PathEscape(reservation.CallID)+"/finish", map[string]any{"assignment": a, "reservation": reservation, "result": result, "error": cause}, nil)
+	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(a.AttemptID)+"/capability-calls/"+url.PathEscape(reservation.CallID)+"/finish", map[string]any{"assignment": leaseAssignment(a), "reservation": reservation, "result": result, "error": cause}, nil)
 }
 func (c *Client) StreamEvents(ctx context.Context, runID string, after int, handle func(relay.Event) error) error {
 	path := "/v1/runs/" + url.PathEscape(runID) + "/events/stream?after=" + strconv.Itoa(after)
@@ -305,11 +305,11 @@ func (c *Client) Claim(ctx context.Context, nodeID string) (controlplane.Assignm
 	return out, err
 }
 func (c *Client) Start(ctx context.Context, value controlplane.Assignment) error {
-	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/start", value, nil)
+	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/start", leaseAssignment(value), nil)
 }
 func (c *Client) Renew(ctx context.Context, value controlplane.Assignment) (controlplane.LeaseUpdate, error) {
 	var out controlplane.LeaseUpdate
-	err := c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/renew", value, &out)
+	err := c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/renew", leaseAssignment(value), &out)
 	return out, err
 }
 func (c *Client) AppendEvent(ctx context.Context, runID, attemptID, lease, eventType string, data any, eventIDs ...string) error {
@@ -324,13 +324,13 @@ func (c *Client) AppendEvents(ctx context.Context, runID, attemptID, lease strin
 	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(attemptID)+"/events/batch", map[string]any{"run_id": runID, "lease_token": lease, "events": events}, nil)
 }
 func (c *Client) Complete(ctx context.Context, value controlplane.Assignment, result relay.Result) error {
-	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/complete", map[string]any{"assignment": value, "result": result}, nil)
+	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/complete", map[string]any{"assignment": leaseAssignment(value), "result": result}, nil)
 }
 func (c *Client) Fail(ctx context.Context, value controlplane.Assignment, cause string) error {
-	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/fail", map[string]any{"assignment": value, "error": cause}, nil)
+	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/fail", map[string]any{"assignment": leaseAssignment(value), "error": cause}, nil)
 }
 func (c *Client) AcknowledgeCancellation(ctx context.Context, value controlplane.Assignment) error {
-	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/cancelled", value, nil)
+	return c.do(ctx, http.MethodPost, "/v1/attempts/"+url.PathEscape(value.AttemptID)+"/cancelled", leaseAssignment(value), nil)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, input, output any) error {
@@ -365,12 +365,16 @@ func (c *Client) do(ctx context.Context, method, path string, input, output any)
 		}
 		return nil
 	}
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxJSONResponseBytes+1))
+	limit := int64(maxJSONResponseBytes)
+	if _, ok := output.(*controlplane.Assignment); ok {
+		limit = 256 << 20
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
 		return err
 	}
-	if len(responseBody) > maxJSONResponseBytes {
-		return fmt.Errorf("relay HTTP: JSON response exceeds %d MiB", maxJSONResponseBytes>>20)
+	if int64(len(responseBody)) > limit {
+		return fmt.Errorf("relay HTTP: JSON response exceeds %d MiB", limit>>20)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var failure map[string]string
@@ -430,3 +434,10 @@ func (e *HTTPError) Error() string {
 }
 
 func (e *HTTPError) HTTPStatusCode() int { return e.StatusCode }
+
+// Lease reports only need assignment identity. In particular, never retransmit
+// the full skill snapshot on each lease renewal or capability call.
+func leaseAssignment(value controlplane.Assignment) controlplane.Assignment {
+	value.Request = relay.Request{}
+	return value
+}

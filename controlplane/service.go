@@ -160,6 +160,17 @@ func (s *Service) Submit(ctx context.Context, request relay.Request) (relay.Run,
 	if _, err := relay.InputImages(request.Input); err != nil {
 		return relay.Run{}, err
 	}
+	if err := relay.ValidateSkills(request.Skills); err != nil {
+		return relay.Run{}, err
+	}
+	if len(request.Skills) > 0 {
+		labels := make(map[string]string, len(request.Runtime.Labels)+1)
+		for k, v := range request.Runtime.Labels {
+			labels[k] = v
+		}
+		labels[relay.SkillSupportLabel] = relay.SkillSupportVersion
+		request.Runtime.Labels = labels
+	}
 	if request.Retry.MaxAttempts <= 0 {
 		request.Retry.MaxAttempts = 1
 	}

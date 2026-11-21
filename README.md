@@ -427,3 +427,37 @@ Host products can expose their own capabilities through bindings while Relay Cor
 their domain semantics. The next product-level validation will be designed separately from Relay Core.
 
 Token usage protocol and runtime coverage: [Run token usage](docs/usage.md).
+
+## Complete Skills on execution nodes
+
+A `Request` can carry `skills`: complete snapshots with `id`, `name`,
+`version`, and `files` (`path`, `content`, `encoding`, `executable`). Compute
+`version` with `relay.SkillVersion`; Relay validates the digest, portable relative
+paths, duplicate paths, and the required `SKILL.md`. Each package supports up to
+200 files and 8 MiB of decoded content; a request supports 160 MiB of decoded
+Skill content. Use base64 file content for predictable wire size. Task submission
+and assignment responses support 256 MiB; other JSON endpoints retain their
+existing limits. Lease reports omit the original request and its Skill files.
+
+Relay Server routes Skill requests only to nodes advertising `relay.skills=1`.
+Updated Relay Nodes advertise this label automatically. Upgrade Server and Node
+before sending Skill requests; older nodes cannot execute them.
+
+Before invoking any runtime, Node installs each snapshot under
+`~/.cache/relay/skills/<tenant-and-skill-hash>/<content-version>/bundle/` and
+adds its absolute `SKILL.md` path to Agent instructions. No provider-specific
+native discovery is required. `skill_cache_root` in `node.json` overrides this
+persistent cache location; SDK `relay.Options.SkillCacheRoot` offers the same
+control for local Engine execution.
+
+The digest includes sorted paths, decoded bytes, and executable flags. Saving
+identical content or reordering files reuses the existing installation. Changed
+content creates a new directory using a temporary installation and atomic
+rename, preserving previous versions for active runs. Install failures stop the
+run before the Agent starts. ZIP executable modes can be supplied by callers;
+Relay writes only regular files, never symlinks.
+
+File snapshots are still transferred at task submission and assignment time;
+this cache avoids repeated disk installation, rather than network transfer.
+Old versions are retained without automatic eviction. Remove unused cache
+versions only when no active runs reference them.

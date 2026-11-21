@@ -40,6 +40,7 @@ type config struct {
 	Runtimes       []runtimeConfig               `json:"runtimes"`
 	Bindings       []bindingConfig               `json:"bindings"`
 	WorkspaceRoot  string                        `json:"workspace_root,omitempty"`
+	SkillCacheRoot string                        `json:"skill_cache_root,omitempty"`
 	OutboxRoot     string                        `json:"outbox_root,omitempty"`
 	OutboxMaxBytes int64                         `json:"outbox_max_bytes,omitempty"`
 }
@@ -230,7 +231,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer outbox.Close()
-	worker := &node.Worker{Registration: cfg.Node, ControlPlane: client, Bindings: registry, Executors: executors, Workspaces: &workspace.Manager{Root: cfg.WorkspaceRoot}}
+	worker := &node.Worker{SkillCacheRoot: cfg.SkillCacheRoot, Registration: cfg.Node, ControlPlane: client, Bindings: registry, Executors: executors, Workspaces: &workspace.Manager{Root: cfg.WorkspaceRoot}}
 	worker.SetCapacity(cfg.Node.Capacity)
 	worker.Outbox = outbox
 	executionCtx, cancelExecutions := context.WithCancel(context.Background())
