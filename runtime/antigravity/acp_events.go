@@ -16,6 +16,7 @@ type acpEvents struct {
 	options       []any
 	counter       int
 	hasActivity   bool
+	hasSubagents  bool
 	thoughtID     string
 	thought       strings.Builder
 	messageID     string
@@ -94,6 +95,9 @@ func (e *acpEvents) update(update map[string]any) {
 		e.emit("assistant.message.delta", map[string]string{"delta": text})
 	case "tool_call", "tool_call_update":
 		e.hasActivity = true
+		if stringField(update, "name") == "invoke_subagent" {
+			e.hasSubagents = true
+		}
 		e.closeThought()
 		e.closeMessage("commentary")
 		e.tool(update)

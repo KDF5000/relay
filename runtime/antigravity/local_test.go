@@ -2,8 +2,10 @@ package antigravity_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,7 +30,7 @@ func TestLocalCLI(t *testing.T) {
 	defer cancel()
 	model := os.Getenv("RELAY_ANTIGRAVITY_MODEL")
 	root := t.TempDir()
-	executor := antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Binary: os.Getenv("RELAY_ANTIGRAVITY_BINARY"), WorkRoot: root, Model: model, ExtraArgs: []string{"--mode", "accept-edits"}}}}
+	executor := antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Binary: os.Getenv("RELAY_ANTIGRAVITY_BINARY"), ToolDir: localLifecycleTools(t), WorkRoot: root, Model: model, ExtraArgs: []string{"--mode", "accept-edits"}}}}
 	version, err := antigravity.ProbeVersion(ctx, executor.Config.Binary)
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +132,7 @@ func TestLocalACPThinking(t *testing.T) {
 	if model == "" {
 		model = "gemini-4-neon-medium"
 	}
-	executor := antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Model: model}}}
+	executor := antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Model: model, ToolDir: localLifecycleTools(t)}}}
 	execution := relay.Execution{RunID: "thinking-probe", WorkDir: t.TempDir(), Runtime: relay.RuntimeRequirement{Model: model, ReasoningEffort: "high"}, Instructions: relay.CompiledInstructions{Stable: "Do not use tools or edit files. Answer the user's question.", Prompt: "How many integer triples (a,b,c) satisfy 1 <= a,b,c <= 30 and a+b+c=47? Answer with only the count. Do not use tools."}, Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{})}
 	thoughtCharacters := 0
 	execution.Emit = func(_ context.Context, name string, data any) {
@@ -146,4 +148,60 @@ func TestLocalACPThinking(t *testing.T) {
 		t.Fatalf("thinking chars=%d result=%+v", thoughtCharacters, result)
 	}
 	t.Logf("Actual ACP thinking streamed: %d bytes; reply=%q; model=%s reasoning tokens=%d", thoughtCharacters, result.Summary, model, *result.Usage.ReasoningTokens)
+}
+
+func localLifecycleTools(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	command := exec.Command("go", "build", "-o", filepath.Join(dir, "relay-tool"), "../../cmd/relay-tool")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build lifecycle helper: %v: %s", err, output)
+	}
+	return dir
+}
+
+func TestLocalACPSubagents(t *testing.T) {
+	if os.Getenv("RELAY_ANTIGRAVITY_SMOKE") != "1" {
+		t.Skip("set RELAY_ANTIGRAVITY_SMOKE=1")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	model := os.Getenv("RELAY_ANTIGRAVITY_MODEL")
+	if model == "" {
+		model = "gemini-4-neon-medium"
+	}
+	executor := antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Model: model, ToolDir: localLifecycleTools(t)}}}
+	execution := relay.Execution{RunID: "native-background-probe", WorkDir: t.TempDir(), Instructions: relay.CompiledInstructions{
+		Stable: "This integration test explicitly authorizes exactly one native subagent. Do not use files, commands, skills or any other agents.",
+		Prompt: "Invoke exactly one native subagent (invoke_subagent), role Tiny Probe, TypeName self, asking it to calculate 47*29 without tools and reply exactly RELAY_CHILD_1363. Wait for its completion, then reply exactly RELAY_PARENT_1363. Do not access files, run commands, use skills, or spawn any other agents.",
+	}, Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{})}
+	var spawned, final, nativeIdle bool
+	execution.Emit = func(_ context.Context, name string, data any) {
+		if name == "runtime.antigravity.session.update" {
+			raw, _ := json.Marshal(data)
+			spawned = spawned || strings.Contains(string(raw), `"name":"invoke_subagent"`)
+			if !strings.Contains(string(raw), `"agent_thought_chunk"`) {
+				t.Logf("native update: %.1000s", raw)
+			}
+		}
+		if strings.HasPrefix(name, "runtime.antigravity.background.") || name == "runtime.antigravity.lifecycle" {
+			t.Logf("native lifecycle: %s %+v", name, data)
+		}
+		if name == "runtime.antigravity.lifecycle" {
+			state, _ := data.(map[string]any)
+			idle, _ := state["fullyIdle"].(bool)
+			if state["hookEventName"] == "Stop" {
+				nativeIdle = idle
+			}
+		}
+		if name == "assistant.final.completed" && !nativeIdle {
+			t.Error("published final result before parent fullyIdle notification")
+		}
+		final = final || name == "assistant.final.completed"
+	}
+	result, err := executor.Execute(ctx, execution)
+	if err != nil || !spawned || !final || !nativeIdle || !strings.Contains(result.Summary, "RELAY_PARENT_1363") {
+		t.Fatalf("native background completion: result=%+v spawned=%v final=%v err=%v", result, spawned, final, err)
+	}
+	t.Logf("Native subagent result collected before completion: %q", result.Summary)
 }

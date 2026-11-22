@@ -13,10 +13,24 @@ import (
 	"time"
 
 	"github.com/KDF5000/relay"
+	"github.com/KDF5000/relay/runtime/antigravity"
 	"github.com/KDF5000/relay/runtime/toolbridge"
 )
 
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "antigravity-hook" {
+		flags := flag.NewFlagSet("antigravity-hook", flag.ExitOnError)
+		url := flags.String("url", os.Getenv("RELAY_AGY_HOOK_URL"), "loopback lifecycle endpoint")
+		token := flags.String("token", os.Getenv("RELAY_AGY_HOOK_TOKEN"), "lifecycle connection token")
+		_ = flags.Parse(os.Args[2:])
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := antigravity.ForwardLifecycleHook(ctx, os.Stdin, *url, *token); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("{}")
+		return
+	}
 	if len(os.Args) < 2 || os.Args[1] != "call" {
 		log.Fatal("usage: relay-tool call [flags] <capability>")
 	}

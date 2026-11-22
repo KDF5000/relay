@@ -36,38 +36,57 @@ type rpcMessage struct {
 type rpcRead struct {
 	message rpcMessage
 	err     error
+	hookAck chan struct{}
 }
 type acpClient struct {
-	ctx             context.Context
-	stop            context.CancelFunc
-	command         *exec.Cmd
-	stdin           io.WriteCloser
-	encoder         *json.Encoder
-	incoming        chan rpcRead
-	stderr          *agentcli.LimitedBuffer
-	closeOnce       sync.Once
-	nextID          int
-	updates         *acpEvents
-	execution       relay.Execution
-	active          bool
-	replaySessionID string
-	replayComplete  bool
+	ctx              context.Context
+	stop             context.CancelFunc
+	command          *exec.Cmd
+	stdin            io.WriteCloser
+	encoder          *json.Encoder
+	incoming         chan rpcRead
+	stderr           *agentcli.LimitedBuffer
+	closeOnce        sync.Once
+	nextID           int
+	updates          *acpEvents
+	execution        relay.Execution
+	active           bool
+	replaySessionID  string
+	replayComplete   bool
+	lifecycle        *acpLifecycle
+	sessionID        string
+	hookSeen         bool
+	fullyIdle        bool
+	stopError        string
+	waitedBackground bool
+	snapshot         *strings.Builder
 }
 
 func startACP(ctx context.Context, config Config, run agentcli.Run, execution relay.Execution, args []string) (*acpClient, error) {
 	processCtx, stop := context.WithCancel(ctx)
+	c := &acpClient{ctx: processCtx, stop: stop, incoming: make(chan rpcRead, 64), execution: execution, updates: newACPEvents(ctx, execution)}
+	lifecycle, err := startACPLifecycle(c, config.ToolDir)
+	if err != nil {
+		stop()
+		return nil, err
+	}
+	c.lifecycle = lifecycle
+	args = append(args, "--add-dir", lifecycle.dir)
 	command := exec.CommandContext(processCtx, ResolveBinary(config.Binary), args...)
 	runtimeprocess.Configure(command)
 	command.Dir = run.WorkDir
 	command.Env = environment(config, run)
+	command.Env = append(command.Env, "RELAY_AGY_HOOK_URL="+lifecycle.url, "RELAY_AGY_HOOK_TOKEN="+lifecycle.token)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		stop()
+		lifecycle.close()
 		return nil, err
 	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		stop()
+		lifecycle.close()
 		_ = stdin.Close()
 		return nil, err
 	}
@@ -75,17 +94,18 @@ func startACP(ctx context.Context, config Config, run agentcli.Run, execution re
 	command.Stderr = stderr
 	if err := command.Start(); err != nil {
 		stop()
+		lifecycle.close()
 		_ = stdin.Close()
 		return nil, err
 	}
-	c := &acpClient{ctx: processCtx, stop: stop, command: command, stdin: stdin, encoder: json.NewEncoder(stdin), incoming: make(chan rpcRead, 64), stderr: stderr, execution: execution, updates: newACPEvents(ctx, execution)}
+	c.command, c.stdin, c.encoder, c.stderr = command, stdin, json.NewEncoder(stdin), stderr
 	go func() {
 		decoder := json.NewDecoder(stdout)
 		for {
 			var message rpcMessage
 			err := decoder.Decode(&message)
 			select {
-			case c.incoming <- rpcRead{message, err}:
+			case c.incoming <- rpcRead{message: message, err: err}:
 			case <-processCtx.Done():
 				return
 			}
@@ -97,7 +117,12 @@ func startACP(ctx context.Context, config Config, run agentcli.Run, execution re
 	return c, nil
 }
 func (c *acpClient) close() {
-	c.closeOnce.Do(func() { c.stop(); _ = c.stdin.Close(); _ = c.command.Wait() })
+	c.closeOnce.Do(func() {
+		c.stop()
+		_ = c.stdin.Close()
+		_ = c.command.Wait()
+		c.lifecycle.close()
+	})
 }
 func (c *acpClient) send(value any) error { return c.encoder.Encode(value) }
 func (c *acpClient) call(ctx context.Context, method string, params any) (map[string]any, error) {
@@ -117,7 +142,7 @@ func (c *acpClient) call(ctx context.Context, method string, params any) (map[st
 			}
 			message := read.message
 			if message.Method != "" {
-				if err := c.handle(ctx, message); err != nil {
+				if err := c.handleRead(ctx, read); err != nil {
 					return nil, err
 				}
 				continue
@@ -138,6 +163,14 @@ func (c *acpClient) call(ctx context.Context, method string, params any) (map[st
 		}
 	}
 }
+
+func (c *acpClient) handleRead(ctx context.Context, read rpcRead) error {
+	if read.hookAck != nil {
+		defer close(read.hookAck)
+	}
+	return c.handle(ctx, read.message)
+}
+
 func (c *acpClient) handle(ctx context.Context, message rpcMessage) error {
 	var params map[string]any
 	if len(message.Params) > 0 && string(message.Params) != "null" {
@@ -145,8 +178,44 @@ func (c *acpClient) handle(ctx context.Context, message rpcMessage) error {
 			return err
 		}
 	}
+	if message.Method == "relay/antigravity-lifecycle" {
+		if !c.active || stringField(params, "conversationId") != c.sessionID {
+			return nil
+		}
+		c.hookSeen = true
+		if c.updates != nil {
+			c.updates.emit("runtime.antigravity.lifecycle", params)
+		}
+		switch stringField(params, "hookEventName") {
+		case "PreInvocation":
+			c.fullyIdle = false
+		case "Stop":
+			idle, present := params["fullyIdle"].(bool)
+			c.fullyIdle = present && idle
+			if !present {
+				c.stopError = "relay antigravity: native Stop hook omitted fullyIdle; cannot confirm background completion"
+			}
+			reason := stringField(params, "terminationReason")
+			if reason != "" && reason != "NO_TOOL_CALL" && reason != "INJECTED_RESPONSE" {
+				c.stopError = "relay antigravity: native execution stopped with " + reason
+			}
+		}
+		return nil
+	}
 	if message.Method == "session/update" {
+		if c.active && stringField(params, "sessionId") != c.sessionID {
+			return nil
+		}
 		update, _ := params["update"].(map[string]any)
+		if c.snapshot != nil && stringField(params, "sessionId") == c.sessionID {
+			switch stringField(update, "sessionUpdate") {
+			case "user_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update":
+				c.snapshot.Reset()
+			case "agent_message_chunk":
+				content, _ := update["content"].(map[string]any)
+				c.snapshot.WriteString(stringField(content, "text"))
+			}
+		}
 		if stringField(update, "sessionUpdate") == "session_info_update" && stringField(params, "sessionId") == c.replaySessionID {
 			c.replayComplete = true
 		}
@@ -378,9 +447,8 @@ func (e Executor) executeACP(ctx context.Context, execution relay.Execution) (re
 			prompt = append(prompt, map[string]string{"type": "image", "mimeType": images[i].ContentType, "data": base64.StdEncoding.EncodeToString(bytes)})
 		}
 	}
-	c.active = true
+	c.sessionID, c.active = sessionID, true
 	result, err := c.call(ctx, "session/prompt", map[string]any{"sessionId": sessionID, "prompt": prompt})
-	c.active = false
 	if err != nil {
 		// agy can acknowledge session/load for a deleted trajectory and report the
 		// lookup failure only when it tries to submit the prompt. Recover solely on
@@ -391,6 +459,13 @@ func (e Executor) executeACP(ctx context.Context, execution relay.Execution) (re
 		}
 		return relay.Result{}, err
 	}
+	if c.updates.hasSubagents || (c.hookSeen && stringField(result, "stopReason") == "end_turn") {
+		if err := c.waitForIdle(ctx, result, sessionParams); err != nil {
+			_ = c.send(map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]string{"sessionId": sessionID}})
+			return relay.Result{}, err
+		}
+	}
+	c.active = false
 	c.updates.emit("runtime.antigravity.prompt.completed", result)
 	c.updates.finish()
 	stopReason := stringField(result, "stopReason")
@@ -413,7 +488,12 @@ func (e Executor) executeACP(ctx context.Context, execution relay.Execution) (re
 	c.updates.emit("assistant.final.completed", map[string]string{"text": finalMessage})
 	c.updates.emit("runtime.antigravity.completed", map[string]string{"session_id": sessionID})
 	output, _ := json.Marshal(map[string]string{"session_id": sessionID, "message": finalMessage, "work_dir": run.WorkDir, "protocol": "acp"})
-	answer := relay.Result{Summary: finalMessage, Output: output, Artifacts: artifacts, Usage: acpUsage(result, model)}
+	usage := acpUsage(result, model)
+	if usage != nil && c.waitedBackground {
+		// The foreground RPC's token snapshot excludes later background rounds.
+		usage.Status = "partial"
+	}
+	answer := relay.Result{Summary: finalMessage, Output: output, Artifacts: artifacts, Usage: usage}
 	if !config.Ephemeral {
 		answer.RuntimeSessionID = sessionID
 	}
@@ -437,7 +517,7 @@ func (c *acpClient) waitForReplay(ctx context.Context) error {
 			if read.message.Method == "" {
 				return errors.New("relay antigravity: unexpected response during session replay")
 			}
-			if err := c.handle(ctx, read.message); err != nil {
+			if err := c.handleRead(ctx, read); err != nil {
 				return err
 			}
 		}

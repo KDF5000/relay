@@ -19,7 +19,7 @@ import (
 )
 
 const acpFixture = `#!/usr/bin/env python3
-import json,sys,os,time
+import json,sys,os,time,urllib.request
 scenario=os.environ.get('ACP_TEST_CASE','normal')
 loaded=False
 native_id='native-session'
@@ -27,6 +27,12 @@ open('.relay/args.txt','w').write('\n'.join(sys.argv[1:]))
 def send(v): print(json.dumps(v),flush=True)
 def update(u): send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':native_id,'update':u}})
 def text(kind,value): update({'sessionUpdate':kind,'content':{'type':'text','text':value}})
+def hook(event,session=None,idle=None,reason=None):
+ v={'conversationId':session or native_id,'hookEventName':event}
+ if idle is not None:v['fullyIdle']=idle
+ if reason is not None:v['terminationReason']=reason
+ req=urllib.request.Request(os.environ['RELAY_AGY_HOOK_URL'],json.dumps(v).encode(),headers={'Authorization':'Bearer '+os.environ['RELAY_AGY_HOOK_TOKEN']})
+ with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req,timeout=5) as response:response.read()
 for line in sys.stdin:
  r=json.loads(line)
  if not r.get('method'): continue
@@ -36,6 +42,16 @@ for line in sys.stdin:
  if method=='initialize': answer={'protocolVersion':1,'agentCapabilities':{'loadSession':True,'promptCapabilities':{'image':True}}}
  elif method=='session/load':
   loaded=True;native_id=p['sessionId']
+  if scenario.startswith('background'):
+   if scenario=='background-late-snapshot':
+    text('agent_message_chunk','HISTORICAL ANSWER')
+    send({'jsonrpc':'2.0','id':r['id'],'result':{'sessionId':native_id}})
+    time.sleep(.1)
+   text('user_message_chunk','current user request')
+   if scenario!='background-empty':text('agent_message_chunk','CHILD_RESULT')
+   if scenario!='background-late-snapshot':send({'jsonrpc':'2.0','id':r['id'],'result':{'sessionId':native_id}})
+   update({'sessionUpdate':'session_info_update'})
+   continue
   if p['sessionId']=='missing' and scenario not in ('late-missing','late-failure'):
    send({'jsonrpc':'2.0','id':r['id'],'error':{'code':-32000,'message':'conversation not found'}});continue
   text('agent_thought_chunk','HISTORICAL THINKING')
@@ -45,6 +61,33 @@ for line in sys.stdin:
  elif method=='session/set_model' and scenario=='invalid-model':
   send({'jsonrpc':'2.0','id':r['id'],'error':{'code':-32602,'message':'unknown model'}});continue
  elif method=='session/prompt':
+  if scenario.startswith('background'):
+   if scenario!='background-missing':hook('PreInvocation')
+   update({'sessionUpdate':'tool_call','toolCallId':'child','name':'invoke_subagent','status':'in_progress'})
+   update({'sessionUpdate':'tool_call_update','toolCallId':'child','name':'invoke_subagent','status':'completed'})
+   text('agent_message_chunk','Waiting for native child.')
+   if scenario=='background-foreground':
+    text('agent_thought_chunk','Child has finished.')
+    text('agent_message_chunk','CHILD_RESULT')
+    hook('Stop',idle=True,reason='NO_TOOL_CALL')
+   send({'jsonrpc':'2.0','id':r['id'],'result':{'stopReason':'end_turn','usage':{'inputTokens':10,'outputTokens':2,'totalTokens':12}}})
+   if scenario in ('background-missing','background-foreground'):continue
+   hook('Stop',session='child-session',idle=True,reason='NO_TOOL_CALL')
+   send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'child-session','update':{'sessionUpdate':'agent_message_chunk','content':{'type':'text','text':'WRONG_CHILD_CONTENT'}}}})
+   hook('Stop',idle=False,reason='NO_TOOL_CALL')
+   if scenario=='background-cancel':time.sleep(60);continue
+   time.sleep(.1)
+   hook('PreInvocation')
+   if scenario=='background-error':
+    hook('Stop',idle=True,reason='ERROR');update({'sessionUpdate':'usage_update'});continue
+   if scenario=='background-approval':
+    send({'jsonrpc':'2.0','id':'permission-id','method':'session/request_permission','params':{'sessionId':native_id,'toolCall':{'title':'Finish child work'},'options':[{'optionId':'once','kind':'allow_once'}]}})
+    with open('.relay/background-permission.json','w') as f:json.dump(json.loads(sys.stdin.readline()),f)
+   if scenario!='background-empty':text('agent_message_chunk','CHILD_RESULT')
+   if scenario=='background-order':update({'sessionUpdate':'usage_update','used':20,'size':100})
+   hook('Stop',idle=True,reason='NO_TOOL_CALL')
+   if scenario!='background-order':update({'sessionUpdate':'usage_update','used':20,'size':100})
+   continue
   if loaded and scenario=='echo-only':
    send({'jsonrpc':'2.0','id':r['id'],'result':{'stopReason':'end_turn'}});continue
   if scenario in ('late-missing','late-failure') and p['sessionId']=='missing':
@@ -89,7 +132,58 @@ func acpTestFixture(t *testing.T, scenario string) (antigravity.Executor, relay.
 	if err := os.WriteFile(binary, []byte(acpFixture), 0700); err != nil {
 		t.Fatal(err)
 	}
-	return antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Binary: binary, Env: map[string]string{"ACP_TEST_CASE": scenario}}}}, relay.Execution{RunID: "acp-test", WorkDir: filepath.Join(root, "work"), Instructions: relay.CompiledInstructions{Stable: "workspace rules", Prompt: "current user request"}, Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{})}
+	if err := os.WriteFile(filepath.Join(root, "relay-tool"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	return antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Binary: binary, ToolDir: root, Env: map[string]string{"ACP_TEST_CASE": scenario}}}}, relay.Execution{RunID: "acp-test", WorkDir: filepath.Join(root, "work"), Instructions: relay.CompiledInstructions{Stable: "workspace rules", Prompt: "current user request"}, Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{})}
+}
+
+func TestACPWaitsForNativeSubagents(t *testing.T) {
+	for _, scenario := range []string{"background", "background-order", "background-late-snapshot", "background-foreground", "background-empty", "background-missing", "background-error", "background-cancel", "background-approval"} {
+		t.Run(scenario, func(t *testing.T) {
+			executor, execution := acpTestFixture(t, scenario)
+			var final, waiting bool
+			execution.Emit = func(_ context.Context, name string, data any) {
+				final = final || name == "assistant.final.completed"
+				waiting = waiting || name == "runtime.antigravity.background.waiting"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if scenario == "background-cancel" {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+			}
+			defer cancel()
+			result, err := executor.Execute(ctx, execution)
+			switch scenario {
+			case "background-empty", "background-missing", "background-error", "background-cancel":
+				if err == nil || final {
+					t.Fatalf("unfinished task reported success: result=%+v err=%v final=%v", result, err, final)
+				}
+			default:
+				if err != nil || result.Summary != "CHILD_RESULT" || !final {
+					t.Fatalf("result=%+v err=%v final=%v", result, err, final)
+				}
+			}
+			if scenario != "background-missing" && scenario != "background-foreground" && !waiting {
+				t.Fatal("did not keep the parent task running")
+			}
+			if scenario == "background-approval" {
+				raw, err := os.ReadFile(filepath.Join(execution.WorkDir, ".relay/background-permission.json"))
+				if err != nil || !bytes.Contains(raw, []byte("cancelled")) {
+					t.Fatalf("background approval did not retain permission policy: %s %v", raw, err)
+				}
+			}
+			promptCount := 0
+			for _, call := range calls(t, execution) {
+				if call["method"] == "session/prompt" {
+					promptCount++
+				}
+			}
+			if promptCount != 1 {
+				t.Fatal("background waiting resubmitted the user request")
+			}
+		})
+	}
 }
 func calls(t *testing.T, execution relay.Execution) []map[string]any {
 	t.Helper()
@@ -332,7 +426,7 @@ func TestACPLateReplayAndEmptyResume(t *testing.T) {
 func TestACPReplayWaitIsCancellable(t *testing.T) {
 	executor, execution := acpTestFixture(t, "missing-replay-end")
 	execution.RuntimeSessionID = "existing-conversation"
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if _, err := executor.Execute(ctx, execution); err == nil {
 		t.Fatal("ignored incomplete replay")

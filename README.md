@@ -389,6 +389,8 @@ make codex-capability-smoke
 
 `codex-smoke`, `trae-smoke`, and `codex-capability-smoke` invoke locally authenticated AI runtimes and may consume provider usage.
 
+AGY ACP executions use the bundled `relay-tool` to forward native `PreInvocation`/`Stop` lifecycle notifications over authenticated loopback HTTP. Relay adds a temporary customization directory, preserving user hooks, and removes it when the execution ends. A foreground `end_turn` with pending native subagents does not complete the Relay Run: the process and approval channel stay open until the parent reports `fullyIdle` and its final streamed output is drained. If lifecycle notifications are unavailable, Relay fails the background execution instead of reporting a waiting message as a completed result. Upgrade `relay-node` and `relay-tool` together using the installer. Token usage remains partial when the ACP foreground snapshot excludes subsequent background rounds.
+
 Run the Server from source with PostgreSQL:
 
 ```bash

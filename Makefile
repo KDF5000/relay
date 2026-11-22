@@ -25,7 +25,7 @@ trae-smoke:
 	GOCACHE=/private/tmp/relay-go-cache go run ./cmd/relay-trae-smoke
 
 antigravity-smoke:
-	RELAY_ANTIGRAVITY_SMOKE=1 GOCACHE=/private/tmp/relay-go-cache go test ./runtime/antigravity -run TestLocalCLI -count=1 -v
+	RELAY_ANTIGRAVITY_SMOKE=1 GOCACHE=/private/tmp/relay-go-cache go test ./runtime/antigravity -run '^(TestLocalCLI|TestLocalACPThinking|TestLocalACPSubagents)$$' -count=1 -v
 
 build-tools:
 	mkdir -p bin
