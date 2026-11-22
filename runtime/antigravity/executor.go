@@ -1,4 +1,4 @@
-// Package antigravity adapts Antigravity CLI (agy)'s headless NDJSON protocol.
+// Package antigravity adapts Antigravity CLI's ACP and headless protocols.
 package antigravity
 
 import (
@@ -19,11 +19,23 @@ import (
 type Config struct {
 	agentcli.Config
 	ReasoningEffort string
+	Protocol        string
 }
 
 type Executor struct{ Config Config }
 
 func (e Executor) Execute(ctx context.Context, execution relay.Execution) (relay.Result, error) {
+	switch e.Config.Protocol {
+	case "", "acp":
+		return e.executeACP(ctx, execution)
+	case "stream-json", "headless":
+		return e.executeHeadless(ctx, execution)
+	default:
+		return relay.Result{}, fmt.Errorf("relay antigravity: unsupported protocol %q", e.Config.Protocol)
+	}
+}
+
+func (e Executor) executeHeadless(ctx context.Context, execution relay.Execution) (relay.Result, error) {
 	config := e.Config
 	if execution.Runtime.Model != "" {
 		config.Model = execution.Runtime.Model
@@ -96,6 +108,7 @@ func (e Executor) Execute(ctx context.Context, execution relay.Execution) (relay
 	var sessionID, finalMessage, status, protocolError string
 	sawResult := false
 	sentPrompt := false
+	toolUpdates := toolEvents{}
 	for {
 		var event map[string]any
 		if err := decoder.Decode(&event); err != nil {
@@ -139,6 +152,7 @@ func (e Executor) Execute(ctx context.Context, execution relay.Execution) (relay
 			sentPrompt = true
 		case "step_update":
 			step, _ := event["step_update"].(map[string]any)
+			toolUpdates.emit(execution.RunID, step, emit)
 			if step["step_type"] == "agent_response" {
 				if delta, _ := step["text_delta"].(string); delta != "" {
 					emit("assistant.message.delta", map[string]string{"delta": delta})

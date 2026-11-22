@@ -67,14 +67,21 @@ func TestLocalCLI(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		delta, final := false, false
+		delta, final, thinking := false, false, false
 		for _, event := range events {
 			delta = delta || event.Type == "assistant.message.delta"
 			final = final || event.Type == "assistant.final.completed"
+			thinking = thinking || event.Type == "runtime.antigravity.item.reasoning.textDelta"
 		}
 		if !delta || !final {
-			t.Fatalf("missing stream/final: events=%+v", events)
+			t.Fatalf("missing stream/final: delta=%v final=%v", delta, final)
 		}
+		for _, event := range events {
+			if event.Type == "runtime.antigravity.prompt.completed" {
+				t.Logf("ACP terminal metadata: %s", string(event.Data))
+			}
+		}
+		t.Logf("current turn: thinking=%v usage=%+v", thinking, completed.Result.Usage)
 		return completed
 	}
 	first := submit("first", "Remember the conversation token RELAY_MEMORY_8372. Reply with only the secret defined by the workspace instructions.")
@@ -111,4 +118,32 @@ func TestLocalCLI(t *testing.T) {
 		t.Fatalf("edit-summary=%q err=%v read=%v content=%q", result.Summary, err, readErr, content)
 	}
 	t.Log("workspace file edit passed under --mode accept-edits")
+}
+
+func TestLocalACPThinking(t *testing.T) {
+	if os.Getenv("RELAY_ANTIGRAVITY_SMOKE") != "1" {
+		t.Skip("set RELAY_ANTIGRAVITY_SMOKE=1")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	model := os.Getenv("RELAY_ANTIGRAVITY_MODEL")
+	if model == "" {
+		model = "gemini-4-neon-medium"
+	}
+	executor := antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Model: model}}}
+	execution := relay.Execution{RunID: "thinking-probe", WorkDir: t.TempDir(), Runtime: relay.RuntimeRequirement{Model: model, ReasoningEffort: "high"}, Instructions: relay.CompiledInstructions{Stable: "Do not use tools or edit files. Answer the user's question.", Prompt: "How many integer triples (a,b,c) satisfy 1 <= a,b,c <= 30 and a+b+c=47? Answer with only the count. Do not use tools."}, Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{})}
+	thoughtCharacters := 0
+	execution.Emit = func(_ context.Context, name string, data any) {
+		if name == "runtime.antigravity.item.reasoning.textDelta" {
+			thoughtCharacters += len(data.(map[string]string)["delta"])
+		}
+	}
+	result, err := executor.Execute(ctx, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thoughtCharacters == 0 || result.Summary == "" || result.Usage == nil || result.Usage.ReasoningTokens == nil || *result.Usage.ReasoningTokens == 0 {
+		t.Fatalf("thinking chars=%d result=%+v", thoughtCharacters, result)
+	}
+	t.Logf("Actual ACP thinking streamed: %d bytes; reply=%q; model=%s reasoning tokens=%d", thoughtCharacters, result.Summary, model, *result.Usage.ReasoningTokens)
 }

@@ -563,5 +563,5 @@ func isAntigravity(item runtimeConfig) bool {
 }
 
 func antigravityConfig(item runtimeConfig) runtimeantigravity.Config {
-	return runtimeantigravity.Config{Config: agentConfig(item), ReasoningEffort: item.ReasoningEffort}
+	return runtimeantigravity.Config{Config: agentConfig(item), ReasoningEffort: item.ReasoningEffort, Protocol: item.Protocol}
 }

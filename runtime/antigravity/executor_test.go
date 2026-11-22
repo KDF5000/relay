@@ -30,7 +30,7 @@ func fixture(t *testing.T, script string) (antigravity.Executor, relay.Execution
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"+script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	return antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Binary: binary}}}, relay.Execution{
+	return antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Binary: binary}, Protocol: "stream-json"}}, relay.Execution{
 		RunID: "test", WorkDir: filepath.Join(root, "work"),
 		Instructions: relay.CompiledInstructions{Stable: "stable instructions", Prompt: "prompt"},
 		Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{}),
@@ -218,5 +218,46 @@ func TestEmptyModelCatalogIsAnError(t *testing.T) {
 	executor, _ := fixture(t, "echo 'Fetching available models...'\n")
 	if _, err := antigravity.ProbeModels(context.Background(), executor.Config); err == nil {
 		t.Fatal("empty catalog treated as successful discovery")
+	}
+}
+
+func TestToolStepEventsReachSharedProcessProtocol(t *testing.T) {
+	executor, execution := fixture(t, initEvent+`cat >/dev/null
+printf '%s\n' '{"event":"step_update","step_update":{"step_type":"agent_response","step_index":1,"state":"DONE","usage":{"thinking_tokens":5}}}'
+printf '%s\n' '{"event":"step_update","step_update":{"conversation_id":"conversation-1","step_type":"tool","step_index":2,"state":"ACTIVE","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"git status --short"}}}}'
+printf '%s\n' '{"event":"step_update","step_update":{"conversation_id":"conversation-1","step_type":"tool","step_index":2,"state":"ACTIVE","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"git status --short"}}}}'
+printf '%s\n' '{"event":"step_update","step_update":{"conversation_id":"conversation-1","step_type":"tool","step_index":2,"state":"DONE","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"git status --short"},"output":" M example.go"}}}'
+printf '%s\n' '{"event":"step_update","step_update":{"conversation_id":"conversation-1","step_type":"tool","step_index":2,"state":"DONE","tool_name":"run_command","tool_info":{"output":"duplicate"}}}'
+printf '%s\n' '{"event":"step_update","step_update":{"conversation_id":"conversation-1","step_type":"tool","step_index":3,"state":"ACTIVE","tool_name":"read_file","tool_info":{"parameters":{"Path":"/work/example.go"}}}}'
+printf '%s\n' '{"event":"step_update","step_update":{"conversation_id":"conversation-1","step_type":"tool","step_index":3,"state":"DONE","tool_name":"read_file","tool_info":{"parameters":{"Path":"/work/example.go"},"output":"file contents"}}}'
+`+successEvent)
+	var normalized []map[string]any
+	rawCount := 0
+	execution.Emit = func(_ context.Context, name string, value any) {
+		if name == "runtime.antigravity.step_update" {
+			rawCount++
+		}
+		if strings.Contains(name, "reasoning") {
+			t.Fatal("synthesized absent thinking text")
+		}
+		if name == "runtime.antigravity.item.started" || name == "runtime.antigravity.item.completed" {
+			normalized = append(normalized, value.(map[string]any)["item"].(map[string]any))
+		}
+	}
+	result, err := executor.Execute(context.Background(), execution)
+	if err != nil || result.Summary != "done" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if rawCount != 7 || len(normalized) != 4 {
+		t.Fatalf("raw=%d normalized=%v", rawCount, normalized)
+	}
+	if normalized[0]["type"] != "commandExecution" || normalized[0]["command"] != "git status --short" || normalized[0]["id"] != normalized[1]["id"] {
+		t.Fatalf("command lifecycle=%v", normalized[:2])
+	}
+	if normalized[1]["status"] != "completed" || normalized[1]["output"] != " M example.go" {
+		t.Fatalf("command result=%v", normalized[1])
+	}
+	if normalized[2]["type"] != "toolCall" || normalized[2]["name"] != "read_file /work/example.go" || normalized[3]["output"] != "file contents" {
+		t.Fatalf("file read=%v", normalized[2:])
 	}
 }
