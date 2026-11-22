@@ -896,8 +896,19 @@ func (s *Store) ResolveInteraction(ctx context.Context, id string, response json
 		return relay.Interaction{}, err
 	}
 	defer tx.Rollback(ctx)
+	// Event sequences are allocated while holding the Run row lock. Follow
+	// transition's Run -> Interaction lock order to avoid both sequence races
+	// with Node event delivery and deadlocks with Get/CreateInteraction.
+	var runID string
+	err = tx.QueryRow(ctx, `SELECT r.id FROM relay_runs r WHERE ($2='' OR r.tenant_id=$2) AND ($3='' OR r.project_id=$3) AND EXISTS(SELECT 1 FROM relay_interactions i WHERE i.id=$1 AND i.run_id=r.id) FOR UPDATE OF r`, id, tenant, project).Scan(&runID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return relay.Interaction{}, controlplane.ErrNotFound
+	}
+	if err != nil {
+		return relay.Interaction{}, err
+	}
 	var value relay.Interaction
-	err = tx.QueryRow(ctx, `SELECT i.id,i.run_id,i.attempt_id,i.kind,i.state,i.prompt,i.data,i.response,i.created_at,i.resolved_at FROM relay_interactions i JOIN relay_runs r ON r.id=i.run_id WHERE i.id=$1 AND ($2='' OR r.tenant_id=$2) AND ($3='' OR r.project_id=$3) FOR UPDATE OF i`, id, tenant, project).Scan(&value.ID, &value.RunID, &value.AttemptID, &value.Kind, &value.State, &value.Prompt, &value.Data, &value.Response, &value.CreatedAt, &value.ResolvedAt)
+	err = tx.QueryRow(ctx, `SELECT id,run_id,attempt_id,kind,state,prompt,data,response,created_at,resolved_at FROM relay_interactions WHERE id=$1 AND run_id=$2 FOR UPDATE`, id, runID).Scan(&value.ID, &value.RunID, &value.AttemptID, &value.Kind, &value.State, &value.Prompt, &value.Data, &value.Response, &value.CreatedAt, &value.ResolvedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return relay.Interaction{}, controlplane.ErrNotFound
 	}
