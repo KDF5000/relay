@@ -410,7 +410,7 @@ Host 产品可以通过 Binding 暴露自己的 Capability，而 Relay Core 不�
 和领取任务传输，目前优化的是磁盘安装。旧版本暂不自动清理，请仅在没有运行中
 任务引用时手动清理缓存。
 
-Antigravity（`agy`，provider/kind 为 `antigravity`，kind 也支持 `agy`）默认通过 `agy acp` 执行。思考片段、流式回复和工具调用分别转为 Relay 的 reasoning/message/item 事件；CLI 支持图片时通过 ACP 图片块传入。原生会话通过 `session/load` 续接，加载时重放的历史不会重复展示；会话丢失且当前轮尚未开始执行时，用 Host 提供的完整历史恢复。已有 Headless 会话 ID 也可以续接。通过 `agy models` 发现模型，`model` 与 `reasoning_effort` 分别选择模型与思考级别。CLI 不公开默认模型，需要配置 `model` 才能声明默认值。指令使用 `AGENTS.md`，请先以 Node 的系统用户运行交互式 `agy` 完成登录。
+Antigravity（`agy`，provider/kind 为 `antigravity`，kind 也支持 `agy`）默认通过 `agy acp` 执行。思考片段、流式回复和工具调用分别转为 Relay 的 reasoning/message/item 事件；CLI 支持图片时通过 ACP 图片块传入。原生会话通过 `session/load` 续接；Relay 等待 agy 在历史回放结束后发送的 `session_info_update`，再提交新的问题，避免加载响应之后继续回放的旧内容混入当前轮。会话丢失或恢复后的轮次空结束，且当前轮尚未开始执行时，用 Host 提供的完整历史恢复。已有 Headless 会话 ID 也可以续接。通过 `agy models` 发现模型，`model` 与 `reasoning_effort` 分别选择模型与思考级别。CLI 不公开默认模型，需要配置 `model` 才能声明默认值。指令使用 `AGENTS.md`，请先以 Node 的系统用户运行交互式 `agy` 完成登录。
 
 ACP 保留 CLI 默认权限模式；已有 `args` 中的 `--mode`（如 `accept-edits`）、`--model` 与 `--effort` 会转换为 ACP 会话设置。工具审批转入 Relay approval interaction，Host 未提供审批 broker 时取消请求；不支持 `allowed_tools` / `disallowed_tools`。`ephemeral` 每次新建会话且不返回会话 ID，但 agy 仍可能在本地保存它。
 

@@ -21,9 +21,11 @@ import (
 const acpFixture = `#!/usr/bin/env python3
 import json,sys,os,time
 scenario=os.environ.get('ACP_TEST_CASE','normal')
+loaded=False
+native_id='native-session'
 open('.relay/args.txt','w').write('\n'.join(sys.argv[1:]))
 def send(v): print(json.dumps(v),flush=True)
-def update(u): send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'native-session','update':u}})
+def update(u): send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':native_id,'update':u}})
 def text(kind,value): update({'sessionUpdate':kind,'content':{'type':'text','text':value}})
 for line in sys.stdin:
  r=json.loads(line)
@@ -33,6 +35,7 @@ for line in sys.stdin:
  answer={}
  if method=='initialize': answer={'protocolVersion':1,'agentCapabilities':{'loadSession':True,'promptCapabilities':{'image':True}}}
  elif method=='session/load':
+  loaded=True;native_id=p['sessionId']
   if p['sessionId']=='missing' and scenario not in ('late-missing','late-failure'):
    send({'jsonrpc':'2.0','id':r['id'],'error':{'code':-32000,'message':'conversation not found'}});continue
   text('agent_thought_chunk','HISTORICAL THINKING')
@@ -42,12 +45,16 @@ for line in sys.stdin:
  elif method=='session/set_model' and scenario=='invalid-model':
   send({'jsonrpc':'2.0','id':r['id'],'error':{'code':-32602,'message':'unknown model'}});continue
  elif method=='session/prompt':
+  if loaded and scenario=='echo-only':
+   send({'jsonrpc':'2.0','id':r['id'],'result':{'stopReason':'end_turn'}});continue
   if scenario in ('late-missing','late-failure') and p['sessionId']=='missing':
    if scenario=='late-failure':text('agent_thought_chunk','Execution already began')
    send({'jsonrpc':'2.0','id':r['id'],'error':{'code':-32603,'message':'Failed to send user message: not_found: trajectory not found'}});continue
   if scenario=='hang': time.sleep(60);continue
   if scenario=='eof':sys.exit(0)
   text('agent_thought_chunk','Think ')
+  if loaded and scenario=='active-empty':
+   send({'jsonrpc':'2.0','id':r['id'],'result':{'stopReason':'end_turn'}});continue
   text('agent_thought_chunk','carefully.')
   text('agent_message_chunk','Checking the workspace.')
   update({'sessionUpdate':'tool_call','toolCallId':'cmd','kind':'execute','title':'Run command','status':'in_progress','rawInput':{'CommandLine':'git status --short'}})
@@ -62,6 +69,14 @@ for line in sys.stdin:
    text('agent_message_chunk','answer')
   answer={'stopReason':'cancelled' if scenario=='cancelled' else 'end_turn','usage':{'inputTokens':100,'outputTokens':20,'thoughtTokens':10,'cachedReadTokens':5,'totalTokens':120}}
  send({'jsonrpc':'2.0','id':r['id'],'result':answer})
+ if method=='session/load':
+  if scenario=='late-history':
+   time.sleep(.1)
+   send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'another-session','update':{'sessionUpdate':'session_info_update'}}})
+   text('agent_thought_chunk','DELAYED HISTORICAL THINKING')
+   text('agent_message_chunk','DELAYED HISTORICAL ANSWER')
+   update({'sessionUpdate':'tool_call','toolCallId':'old-tool','kind':'execute','title':'OLD COMMAND','status':'completed'})
+  if scenario!='missing-replay-end':update({'sessionUpdate':'session_info_update'})
 `
 
 func acpTestFixture(t *testing.T, scenario string) (antigravity.Executor, relay.Execution) {
@@ -271,5 +286,60 @@ func TestACPLateMissingSessionRecoveryDoesNotRepeatActiveWork(t *testing.T) {
 				t.Fatalf("prompt count=%d want=%d", count, expected)
 			}
 		})
+	}
+}
+
+func TestACPLateReplayAndEmptyResume(t *testing.T) {
+	for _, scenario := range []string{"late-history", "echo-only", "active-empty"} {
+		t.Run(scenario, func(t *testing.T) {
+			executor, execution := acpTestFixture(t, scenario)
+			execution.RuntimeSessionID = "existing-conversation"
+			execution.FallbackPrompt = "restore current user request from shared history"
+			var recorded []string
+			execution.Emit = func(_ context.Context, event string, data any) {
+				raw, _ := json.Marshal(data)
+				recorded = append(recorded, event+string(raw))
+			}
+			result, err := executor.Execute(context.Background(), execution)
+			if scenario == "active-empty" {
+				if err == nil {
+					t.Fatal("current activity with no answer succeeded")
+				}
+			} else if err != nil || result.Summary != "final answer" {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			joined := strings.Join(recorded, "\n")
+			if strings.Contains(joined, "HISTORICAL") || strings.Contains(joined, "OLD COMMAND") {
+				t.Fatal("late history leaked into current turn")
+			}
+			promptCount := 0
+			for _, call := range calls(t, execution) {
+				if call["method"] == "session/prompt" {
+					promptCount++
+				}
+			}
+			if scenario == "echo-only" {
+				if promptCount != 2 || result.RuntimeSessionID == execution.RuntimeSessionID {
+					t.Fatal("empty resume not replaced with recovery context")
+				}
+			} else if promptCount != 1 {
+				t.Fatal("repeated a live turn")
+			}
+		})
+	}
+}
+
+func TestACPReplayWaitIsCancellable(t *testing.T) {
+	executor, execution := acpTestFixture(t, "missing-replay-end")
+	execution.RuntimeSessionID = "existing-conversation"
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := executor.Execute(ctx, execution); err == nil {
+		t.Fatal("ignored incomplete replay")
+	}
+	for _, call := range calls(t, execution) {
+		if call["method"] == "session/prompt" {
+			t.Fatal("submitted prompt before replay completed")
+		}
 	}
 }

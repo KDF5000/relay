@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/KDF5000/relay"
 	"github.com/KDF5000/relay/runtime/agentcli"
@@ -37,18 +38,20 @@ type rpcRead struct {
 	err     error
 }
 type acpClient struct {
-	ctx       context.Context
-	stop      context.CancelFunc
-	command   *exec.Cmd
-	stdin     io.WriteCloser
-	encoder   *json.Encoder
-	incoming  chan rpcRead
-	stderr    *agentcli.LimitedBuffer
-	closeOnce sync.Once
-	nextID    int
-	updates   *acpEvents
-	execution relay.Execution
-	active    bool
+	ctx             context.Context
+	stop            context.CancelFunc
+	command         *exec.Cmd
+	stdin           io.WriteCloser
+	encoder         *json.Encoder
+	incoming        chan rpcRead
+	stderr          *agentcli.LimitedBuffer
+	closeOnce       sync.Once
+	nextID          int
+	updates         *acpEvents
+	execution       relay.Execution
+	active          bool
+	replaySessionID string
+	replayComplete  bool
 }
 
 func startACP(ctx context.Context, config Config, run agentcli.Run, execution relay.Execution, args []string) (*acpClient, error) {
@@ -144,6 +147,9 @@ func (c *acpClient) handle(ctx context.Context, message rpcMessage) error {
 	}
 	if message.Method == "session/update" {
 		update, _ := params["update"].(map[string]any)
+		if stringField(update, "sessionUpdate") == "session_info_update" && stringField(params, "sessionId") == c.replaySessionID {
+			c.replayComplete = true
+		}
 		if stringField(update, "sessionUpdate") == "config_option_update" {
 			c.updates.options, _ = update["configOptions"].([]any)
 		}
@@ -289,6 +295,7 @@ func (e Executor) executeACP(ctx context.Context, execution relay.Execution) (re
 		if !supportsLoad {
 			return relay.Result{}, errors.New("relay antigravity: ACP server does not support session/load")
 		}
+		c.replaySessionID = execution.RuntimeSessionID
 		sessionParams["sessionId"] = execution.RuntimeSessionID
 		session, err = c.call(ctx, "session/load", sessionParams)
 		if err != nil {
@@ -305,6 +312,13 @@ func (e Executor) executeACP(ctx context.Context, execution relay.Execution) (re
 		if returned := stringField(session, "sessionId"); returned != "" && returned != sessionID {
 			c.close()
 			return e.recoverSession(ctx, execution, "requested conversation was not loaded")
+		}
+		if err := c.waitForReplay(ctx); err != nil {
+			if ctx.Err() != nil {
+				return relay.Result{}, ctx.Err()
+			}
+			c.close()
+			return e.recoverSession(ctx, execution, err.Error())
 		}
 	} else {
 		session, err = c.call(ctx, "session/new", sessionParams)
@@ -384,6 +398,11 @@ func (e Executor) executeACP(ctx context.Context, execution relay.Execution) (re
 		return relay.Result{}, fmt.Errorf("relay antigravity: ACP stopped with %q", stopReason)
 	}
 	finalMessage := strings.TrimSpace(c.updates.message.String())
+	if finalMessage == "" && resuming && !c.updates.hasActivity && stopReason == "end_turn" && execution.FallbackPrompt != "" {
+		_ = c.send(map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]string{"sessionId": sessionID}})
+		c.close()
+		return e.recoverSession(ctx, execution, "resumed ACP session ended before current-turn execution")
+	}
 	if finalMessage == "" {
 		return relay.Result{}, errors.New("relay antigravity: ACP completed without a final message")
 	}
@@ -399,4 +418,29 @@ func (e Executor) executeACP(ctx context.Context, execution relay.Execution) (re
 		answer.RuntimeSessionID = sessionID
 	}
 	return answer, nil
+}
+
+// agy 1.5.14 acknowledges session/load before its asynchronous history replay
+// finishes. session_info_update is emitted after that replay. Wait for that
+// session's update before sending a prompt; a delay or user echo is not a fence.
+func (c *acpClient) waitForReplay(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for !c.replayComplete {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("relay antigravity: session replay did not finish: %w", ctx.Err())
+		case read := <-c.incoming:
+			if read.err != nil {
+				return fmt.Errorf("relay antigravity: session replay stream ended: %w", read.err)
+			}
+			if read.message.Method == "" {
+				return errors.New("relay antigravity: unexpected response during session replay")
+			}
+			if err := c.handle(ctx, read.message); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
