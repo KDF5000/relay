@@ -271,7 +271,11 @@ Run the installer without `--install-service` to keep the Node in the foreground
 ~/.local/bin/relay-node -config ~/.config/relay/node.json
 ```
 
-Useful installer options include `--node-id`, `--capacity`, `--runtime auto|codex|trae|claude|pi|opencode|antigravity|qoder|qwenwork|both|all`, `--version`, `--install-dir`, `--config`, and `--force`. `auto` discovers every installed supported CLI, `both` retains its original Codex-plus-Trae meaning, and `all` requires all eight. Existing configuration is preserved unless `--force` is set, in which case the installer creates a timestamped backup.
+Useful installer options include `--node-id`, `--capacity`, `--runtime auto|codex|trae|claude|pi|opencode|antigravity|qoder|qwenwork|both|all`, `--version`, `--install-dir`, `--config`, and `--force`. `auto` discovers every installed supported CLI, `both` retains its original Codex-plus-Trae meaning, and `all` requires all eight. On upgrade, the installer preserves the existing Node ID, server, credentials, capacity, custom settings, and existing Runtime configurations, then adds newly discovered providers. A new Runtime uses the existing Node ID and execution directory. Existing providers and aliases are not duplicated; if nothing is added, the configuration is not rewritten. Changed configurations are backed up and replaced atomically. `--force` still replaces the entire configuration after creating a backup.
+
+With `--install-service`, an upgrade restarts the existing Linux service or macOS LaunchAgent while preserving its credentials and custom service settings. New Runtime instances are then reported to Relay Server; users can select them in Steer's **Add Runtime → Choose an existing Node** flow without editing `node.json`.
+
+Automatic merging uses the `relayctl config merge-runtimes` command bundled with the release. Upgrade using an installer and release that both contain this feature; older releases do not provide the merge command. Installations without `--install-service` retain foreground operation and must restart their Node process to load the new configuration.
 
 ## Terminal client
 

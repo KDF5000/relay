@@ -237,7 +237,11 @@ tail -f ~/.cache/relay/logs/node.log
 ~/.local/bin/relay-node -config ~/.config/relay/node.json
 ```
 
-常用安装参数包括 `--node-id`、`--capacity`、`--runtime auto|codex|trae|claude|pi|opencode|qoder|qwenwork|both|all`、`--version`、`--install-dir`、`--config` 和 `--force`。`auto` 自动发现所有已安装的受支持 CLI，`both` 仍表示 Codex 和 Trae，`all` 要求七种 CLI 全部可用。macOS 上除 `PATH` 外还会查找 `QoderWork.app`、`QwenWorkCN.app` 内置的 CLI。默认保留已有配置；传入 `--force` 时会先创建带时间戳的备份。
+常用安装参数包括 `--node-id`、`--capacity`、`--runtime auto|codex|trae|claude|pi|opencode|antigravity|qoder|qwenwork|both|all`、`--version`、`--install-dir`、`--config` 和 `--force`。`auto` 自动发现所有已安装的受支持 CLI，`both` 仍表示 Codex 和 Trae，`all` 要求八种 CLI 全部可用。macOS 上除 `PATH` 外还会查找 `QoderWork.app`、`QwenWorkCN.app` 内置的 CLI。升级时保留已有 Node ID、Server、凭证、并发数、自定义设置和 Runtime 配置，自动追加新发现的 Runtime。新增 Runtime 使用原 Node ID 和执行目录；已有 provider 或别名不会重复添加。没有新增项时不重写配置；有新增项时先备份，再原子更新。`--force` 仍表示备份后整体替换配置。
+
+使用 `--install-service` 升级时，会重启已有的 Linux 服务或 macOS LaunchAgent，保留其中的凭证和自定义服务设置。新增 Runtime 会自动上报给 Relay Server，用户可以在 Steer 的“添加运行环境 → 选择已有 Node”中接入，无需手动编辑 `node.json`。
+
+自动合并由发布包内的 `relayctl config merge-runtimes` 完成，需要使用包含此功能的安装脚本和发布版本；旧版本没有这个命令。不带 `--install-service` 的前台运行方式仍需重启 Node 进程以加载配置。
 
 ## 终端客户端
 

@@ -55,6 +55,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	transport := httpapi.NewAuthenticatedClient(*server, os.Getenv("RELAY_HOST_TOKEN"))
 	client := sdk.New(transport)
 	switch remaining[0] {
+	case "config":
+		if len(remaining) > 1 && remaining[1] == "merge-runtimes" {
+			return mergeRuntimeConfig(remaining[2:], stdout, stderr)
+		}
+		return errors.New("usage: relayctl config merge-runtimes --config FILE --discovered FILE")
 	case "version":
 		fmt.Fprintln(stdout, relay.VersionLine("relayctl"))
 		return nil
@@ -675,6 +680,7 @@ Usage:
   relayctl --version
   relayctl [--server URL] doctor [--execute] [options]
   relayctl [--server URL] runtime list [--json]
+  relayctl config merge-runtimes --config FILE --discovered FILE
   relayctl [--server URL] run submit --prompt TEXT [options]
   relayctl [--server URL] run list
   relayctl [--server URL] run get <run-id> [--json]

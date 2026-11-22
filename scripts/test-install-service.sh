@@ -11,10 +11,12 @@ package_dir="$test_root/package"
 fake_bin="$test_root/fake-bin"
 mkdir -p "$release_dir" "$package_dir" "$fake_bin"
 
-for binary in relay-node relay-tool relayctl; do
+for binary in relay-node relay-tool; do
   printf '#!/bin/sh\nexit 0\n' >"$package_dir/$binary"
   chmod 755 "$package_dir/$binary"
 done
+# Exercise the real configuration merge command while keeping Node/service mocks.
+GOWORK=off go -C "$repository_root" build -o "$package_dir/relayctl" ./cmd/relayctl
 
 for target_os in linux darwin; do
   asset="relay_${target_os}_arm64.tar.gz"
@@ -104,7 +106,8 @@ fi
 test "$(stat -c '%a' "$linux_unit" 2>/dev/null || stat -f '%Lp' "$linux_unit")" = 600
 grep -F 'ExecStart=' "$linux_unit" >/dev/null
 grep -F 'daemon-reload' "$test_root/Linux-service.log" >/dev/null
-grep -F 'enable --now relay-node.service' "$test_root/Linux-service.log" >/dev/null
+grep -F 'restart relay-node.service' "$test_root/Linux-service.log" >/dev/null
+grep -F 'enable relay-node.service' "$test_root/Linux-service.log" >/dev/null
 
 run_installer Darwin
 mac_plist="$test_root/home-Darwin/Library/LaunchAgents/dev.relay.node.plist"
@@ -163,5 +166,92 @@ HOME="$bundled_home" \
   RELAY_DOWNLOAD_BASE_URL="https://example.invalid/release" \
   sh "$repository_root/install.sh" --runtime qwenwork
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["runtimes"]; assert [x["provider"] for x in r] == ["qwenwork"]; assert r[0]["command"].endswith("QwenWorkCN.app/Contents/Resources/bin/qoderclicn"), r' "$bundled_home/.config/relay/node.json"
+
+# Upgrading discovers new providers without replacing old configuration or
+# service-only credentials. Run each upgrade twice to catch duplicate installs.
+for os_name in Linux Darwin; do
+  home_dir="$test_root/home-$os_name"
+  config="$home_dir/.config/relay/node.json"
+  if [ "$os_name" = Linux ]; then
+    service_file="$home_dir/.config/systemd/user/relay-node.service"
+  else
+    service_file="$home_dir/Library/LaunchAgents/dev.relay.node.plist"
+  fi
+  python3 - "$config" <<'PYTEST'
+import json,sys
+p=sys.argv[1]
+c=json.load(open(p))
+c['node']['id']='stable-upgrade-node'
+c['node']['capacity']=7
+c['node']['labels']={'name':'preserved-machine'}
+c['server']='https://existing-relay.example'
+c.pop('token',None)  # Credentials live only in the existing service.
+c['custom_future_field']={'keep':True}
+c['bindings']=[{'name':'existing-capability'}]
+r=c['runtimes'][0]
+r['id']='stable-upgrade-node/custom-codex'
+r['command']='/custom/codex'
+r['model']='chosen-model'
+r['env']={'CUSTOM_KEY':'preserved'}
+r['args']=['custom-argument']
+r['work_root']='/custom/runs'
+json.dump(c,open(p,'w'),indent=2)
+PYTEST
+  cp "$config" "$test_root/$os_name-original.json"
+  cp "$service_file" "$test_root/$os_name-original-service"
+  for pass in 1 2; do
+    HOME="$home_dir" \
+      XDG_CONFIG_HOME="$home_dir/.config" \
+      XDG_CACHE_HOME="$home_dir/.cache" \
+      PATH="$fake_bin:$PATH" \
+      FAKE_OS="$os_name" \
+      FAKE_RELEASE_DIR="$release_dir" \
+      FAKE_SERVICE_LOG="$test_root/$os_name-upgrade-service.log" \
+      RELAY_DOWNLOAD_BASE_URL="https://example.invalid/release" \
+      RELAY_NODE_TOKEN='' \
+      sh "$repository_root/install.sh" --runtime auto --install-service
+    if [ "$pass" = 1 ]; then
+      cp "$config" "$test_root/$os_name-after-first-upgrade.json"
+    else
+      cmp "$config" "$test_root/$os_name-after-first-upgrade.json"
+    fi
+  done
+  cmp "$service_file" "$test_root/$os_name-original-service"
+  python3 - "$config" "$test_root/$os_name-original.json" <<'PYTEST'
+import json,sys,glob
+c=json.load(open(sys.argv[1]));before=json.load(open(sys.argv[2]))
+r=c['runtimes'];assert len(r)==8,r
+assert len({x['provider'] for x in r})==8
+assert r[0]==before['runtimes'][0]
+assert {k:v for k,v in c.items() if k!='runtimes'}=={k:v for k,v in before.items() if k!='runtimes'}
+assert all(x['id']=='stable-upgrade-node/'+x['provider'] for x in r[1:])
+assert all(x['work_root']=='/custom/runs' for x in r[1:])
+backups=glob.glob(sys.argv[1]+'.backup.*');assert len(backups)==1,backups
+assert json.load(open(backups[0]))==before
+PYTEST
+  if [ "$os_name" = Linux ]; then
+    grep -F 'restart relay-node.service' "$test_root/$os_name-upgrade-service.log" >/dev/null
+  else
+    grep -F 'kickstart -k gui/' "$test_root/$os_name-upgrade-service.log" >/dev/null
+  fi
+done
+
+# A configured Node still upgrades when installed CLIs are not on login PATH.
+empty_bin="$test_root/no-runtime-bin"
+mkdir -p "$empty_bin"
+cp "$fake_bin/uname" "$fake_bin/curl" "$fake_bin/systemctl" "$empty_bin/"
+cp "$linux_config" "$test_root/before-no-cli-upgrade.json"
+HOME="$test_root/home-Linux" \
+  XDG_CONFIG_HOME="$test_root/home-Linux/.config" \
+  XDG_CACHE_HOME="$test_root/home-Linux/.cache" \
+  PATH="$empty_bin:/usr/bin:/bin" \
+  FAKE_OS=Linux \
+  FAKE_RELEASE_DIR="$release_dir" \
+  FAKE_SERVICE_LOG="$test_root/no-cli-service.log" \
+  RELAY_DOWNLOAD_BASE_URL="https://example.invalid/release" \
+  RELAY_NODE_TOKEN='' \
+  sh "$repository_root/install.sh" --runtime auto --install-service
+cmp "$linux_config" "$test_root/before-no-cli-upgrade.json"
+grep -F 'restart relay-node.service' "$test_root/no-cli-service.log" >/dev/null
 
 printf 'install service tests passed\n'

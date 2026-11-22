@@ -20,7 +20,8 @@ install_service="${RELAY_INSTALL_SERVICE:-0}"
 
 usage() {
   cat <<'EOF'
-Install Relay Node and generate its configuration.
+Install or upgrade Relay Node and discover supported Runtime CLIs.
+Existing configuration is preserved; newly discovered Runtimes are added automatically.
 
 Usage:
   install.sh [options]
@@ -227,7 +228,7 @@ esac
 [ "$include_antigravity" -eq 0 ] || [ -n "$antigravity_command" ] || fail "Antigravity CLI (agy) was not found in PATH"
 [ "$include_qoder" -eq 0 ] || [ -n "$qoder_command" ] || fail "Qoder CLI (qodercli) was not found in PATH or QoderWork.app"
 [ "$include_qwenwork" -eq 0 ] || [ -n "$qwenwork_command" ] || fail "QwenWork CLI (qoderclicn) was not found in PATH or QwenWorkCN.app"
-[ "$include_codex" -eq 1 ] || [ "$include_trae" -eq 1 ] || [ "$include_claude" -eq 1 ] || [ "$include_pi" -eq 1 ] || [ "$include_opencode" -eq 1 ] || [ "$include_antigravity" -eq 1 ] || [ "$include_qoder" -eq 1 ] || [ "$include_qwenwork" -eq 1 ] || fail "no supported Runtime found; install Codex, Trae, Claude Code, Pi, OpenCode, Antigravity, Qoder, or QwenWork, or pass --runtime"
+{ [ -f "$config_file" ] && [ "$force_config" -eq 0 ] && [ "$runtime_choice" = auto ]; } || [ "$include_codex" -eq 1 ] || [ "$include_trae" -eq 1 ] || [ "$include_claude" -eq 1 ] || [ "$include_pi" -eq 1 ] || [ "$include_opencode" -eq 1 ] || [ "$include_antigravity" -eq 1 ] || [ "$include_qoder" -eq 1 ] || [ "$include_qwenwork" -eq 1 ] || fail "no supported Runtime found; install Codex, Trae, Claude Code, Pi, OpenCode, Antigravity, Qoder, or QwenWork, or pass --runtime"
 
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -245,6 +246,11 @@ install_systemd_service() {
   command -v systemctl >/dev/null 2>&1 || fail "systemctl is required to install the Linux service"
   service_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
   service_file="$service_dir/relay-node.service"
+  if [ "$preserve_config" -eq 1 ] && [ -f "$service_file" ]; then
+    systemctl --user restart relay-node.service || fail "could not restart relay-node.service"
+    printf 'Restarted existing systemd user service: %s\n' "$service_file"
+    return
+  fi
   escaped_home=$(systemd_escape "$HOME")
   escaped_path=$(systemd_escape "$PATH")
   escaped_binary=$(systemd_escape "$install_dir/relay-node")
@@ -279,7 +285,8 @@ WantedBy=default.target
 EOF
   chmod 600 "$service_file"
   systemctl --user daemon-reload || fail "systemd user manager is unavailable; log in as the target user and try again"
-  systemctl --user enable --now relay-node.service || fail "could not enable and start relay-node.service"
+  systemctl --user enable relay-node.service || fail "could not enable relay-node.service"
+  systemctl --user restart relay-node.service || fail "could not start relay-node.service"
   printf 'Installed and started systemd user service: %s\n' "$service_file"
   printf 'For startup without an interactive login, run: sudo loginctl enable-linger %s\n' "$(id -un)"
 }
@@ -289,6 +296,15 @@ install_launchd_service() {
   service_dir="$HOME/Library/LaunchAgents"
   log_dir="$data_dir/logs"
   service_file="$service_dir/dev.relay.node.plist"
+  if [ "$preserve_config" -eq 1 ] && [ -f "$service_file" ]; then
+    launch_domain="gui/$(id -u)"
+    if ! launchctl print "$launch_domain/dev.relay.node" >/dev/null 2>&1; then
+      launchctl bootstrap "$launch_domain" "$service_file" || launchctl load -w "$service_file" || fail "could not load dev.relay.node"
+    fi
+    launchctl kickstart -k "$launch_domain/dev.relay.node" || fail "could not restart dev.relay.node"
+    printf 'Restarted existing macOS LaunchAgent: %s\n' "$service_file"
+    return
+  fi
   escaped_home=$(xml_escape "$HOME")
   escaped_path=$(xml_escape "$PATH")
   escaped_binary=$(xml_escape "$install_dir/relay-node")
@@ -358,10 +374,69 @@ install_node_service() {
   esac
 }
 
+escaped_server=$(json_escape "$server_url")
+escaped_node=$(json_escape "$node_id")
+escaped_install_dir=$(json_escape "$install_dir")
+escaped_data_dir=$(json_escape "$data_dir")
+escaped_token=$(json_escape "$node_token")
+runtime_json=""
+separator=""
+if [ "$include_codex" -eq 1 ]; then
+  escaped_command=$(json_escape "$codex_command")
+  runtime_json="${runtime_json}${separator}
+  {\"id\": \"${escaped_node}/codex\", \"kind\": \"codex\", \"provider\": \"codex\", \"protocol\": \"app-server\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+  separator=","
+fi
+if [ "$include_trae" -eq 1 ]; then
+  escaped_command=$(json_escape "$trae_command")
+  runtime_json="${runtime_json}${separator}
+  {\"id\": \"${escaped_node}/trae\", \"kind\": \"trae\", \"provider\": \"trae\", \"protocol\": \"app-server\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+  separator=","
+fi
+if [ "$include_claude" -eq 1 ]; then
+  escaped_command=$(json_escape "$claude_command")
+  runtime_json="${runtime_json}${separator}
+  {\"id\": \"${escaped_node}/claude\", \"kind\": \"claude\", \"provider\": \"claude\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+  separator=","
+fi
+if [ "$include_pi" -eq 1 ]; then
+  escaped_command=$(json_escape "$pi_command")
+  runtime_json="${runtime_json}${separator}
+  {\"id\": \"${escaped_node}/pi\", \"kind\": \"pi\", \"provider\": \"pi\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+  separator=","
+fi
+if [ "$include_opencode" -eq 1 ]; then
+  escaped_command=$(json_escape "$opencode_command")
+  runtime_json="${runtime_json}${separator}
+  {\"id\": \"${escaped_node}/opencode\", \"kind\": \"opencode\", \"provider\": \"opencode\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+  separator=","
+fi
+if [ "$include_antigravity" -eq 1 ]; then
+  escaped_command=$(json_escape "$antigravity_command")
+  runtime_json="${runtime_json}${separator}
+  {\"id\": \"${escaped_node}/antigravity\", \"kind\": \"antigravity\", \"provider\": \"antigravity\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+  separator=","
+fi
+if [ "$include_qoder" -eq 1 ]; then
+  escaped_command=$(json_escape "$qoder_command")
+  runtime_json="${runtime_json}${separator}
+  {\"id\": \"${escaped_node}/qoder\", \"kind\": \"qoder\", \"provider\": \"qoder\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+  separator=","
+fi
+if [ "$include_qwenwork" -eq 1 ]; then
+  escaped_command=$(json_escape "$qwenwork_command")
+  runtime_json="${runtime_json}${separator}
+  {\"id\": \"${escaped_node}/qwenwork\", \"kind\": \"qwenwork\", \"provider\": \"qwenwork\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
+fi
+
+preserve_config=0
 if [ -f "$config_file" ] && [ "$force_config" -ne 1 ] && { [ -n "$enrollment_token" ] || [ -n "$steer_server_url" ]; }; then
   fail "an existing Node config cannot be enrolled in place; remove it or rerun with --force to create a new Node identity"
 elif [ -f "$config_file" ] && [ "$force_config" -ne 1 ]; then
-  printf 'Keeping existing config: %s\n' "$config_file"
+  preserve_config=1
+  printf '[%s\n]\n' "$runtime_json" >"$temporary_dir/discovered-runtimes.json"
+  [ -x "$install_dir/relayctl" ] || fail "this Relay release does not support automatic Runtime configuration updates"
+  "$install_dir/relayctl" config merge-runtimes --config "$config_file" --discovered "$temporary_dir/discovered-runtimes.json" || fail "could not merge discovered Runtimes; use a Relay release with automatic Runtime configuration support"
 else
   if [ -n "$enrollment_token" ] || [ -n "$steer_server_url" ]; then
     [ -n "$enrollment_token" ] || fail "--enrollment-token is required with --steer-server"
@@ -383,61 +458,6 @@ else
     backup_file="${config_file}.backup.$(date +%Y%m%d%H%M%S)"
     cp "$config_file" "$backup_file"
     printf 'Backed up existing config to %s\n' "$backup_file"
-  fi
-
-  escaped_server=$(json_escape "$server_url")
-  escaped_node=$(json_escape "$node_id")
-  escaped_install_dir=$(json_escape "$install_dir")
-  escaped_data_dir=$(json_escape "$data_dir")
-  escaped_token=$(json_escape "$node_token")
-  runtime_json=""
-  separator=""
-  if [ "$include_codex" -eq 1 ]; then
-    escaped_command=$(json_escape "$codex_command")
-    runtime_json="${runtime_json}${separator}
-    {\"id\": \"${escaped_node}/codex\", \"kind\": \"codex\", \"provider\": \"codex\", \"protocol\": \"app-server\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
-    separator=","
-  fi
-  if [ "$include_trae" -eq 1 ]; then
-    escaped_command=$(json_escape "$trae_command")
-    runtime_json="${runtime_json}${separator}
-    {\"id\": \"${escaped_node}/trae\", \"kind\": \"trae\", \"provider\": \"trae\", \"protocol\": \"app-server\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
-    separator=","
-  fi
-  if [ "$include_claude" -eq 1 ]; then
-    escaped_command=$(json_escape "$claude_command")
-    runtime_json="${runtime_json}${separator}
-    {\"id\": \"${escaped_node}/claude\", \"kind\": \"claude\", \"provider\": \"claude\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
-    separator=","
-  fi
-  if [ "$include_pi" -eq 1 ]; then
-    escaped_command=$(json_escape "$pi_command")
-    runtime_json="${runtime_json}${separator}
-    {\"id\": \"${escaped_node}/pi\", \"kind\": \"pi\", \"provider\": \"pi\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
-    separator=","
-  fi
-  if [ "$include_opencode" -eq 1 ]; then
-    escaped_command=$(json_escape "$opencode_command")
-    runtime_json="${runtime_json}${separator}
-    {\"id\": \"${escaped_node}/opencode\", \"kind\": \"opencode\", \"provider\": \"opencode\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
-    separator=","
-  fi
-  if [ "$include_antigravity" -eq 1 ]; then
-    escaped_command=$(json_escape "$antigravity_command")
-    runtime_json="${runtime_json}${separator}
-    {\"id\": \"${escaped_node}/antigravity\", \"kind\": \"antigravity\", \"provider\": \"antigravity\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
-    separator=","
-  fi
-  if [ "$include_qoder" -eq 1 ]; then
-    escaped_command=$(json_escape "$qoder_command")
-    runtime_json="${runtime_json}${separator}
-    {\"id\": \"${escaped_node}/qoder\", \"kind\": \"qoder\", \"provider\": \"qoder\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
-    separator=","
-  fi
-  if [ "$include_qwenwork" -eq 1 ]; then
-    escaped_command=$(json_escape "$qwenwork_command")
-    runtime_json="${runtime_json}${separator}
-    {\"id\": \"${escaped_node}/qwenwork\", \"kind\": \"qwenwork\", \"provider\": \"qwenwork\", \"command\": \"${escaped_command}\", \"tool_dir\": \"${escaped_install_dir}\", \"work_root\": \"${escaped_data_dir}/runs\", \"ephemeral\": false}"
   fi
 
   token_line=""
