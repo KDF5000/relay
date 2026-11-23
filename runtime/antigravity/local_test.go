@@ -205,3 +205,53 @@ func TestLocalACPSubagents(t *testing.T) {
 	}
 	t.Logf("Native subagent result collected before completion: %q", result.Summary)
 }
+
+type autoApproveBroker struct {
+	prompts []string
+}
+
+func (b *autoApproveBroker) Request(_ context.Context, req relay.InteractionRequest) (json.RawMessage, error) {
+	b.prompts = append(b.prompts, req.Prompt)
+	return json.RawMessage(`{"approved":true,"optionId":"allow_once"}`), nil
+}
+
+func TestLocalACPSubagentCommandApproval(t *testing.T) {
+	if os.Getenv("RELAY_ANTIGRAVITY_SMOKE") != "1" {
+		t.Skip("set RELAY_ANTIGRAVITY_SMOKE=1")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	model := os.Getenv("RELAY_ANTIGRAVITY_MODEL")
+	if model == "" {
+		model = "gemini-4-neon-medium"
+	}
+	broker := &autoApproveBroker{}
+	executor := antigravity.Executor{Config: antigravity.Config{Config: agentcli.Config{Model: model, ToolDir: localLifecycleTools(t)}}}
+	execution := relay.Execution{
+		RunID:        "native-subagent-command-probe",
+		WorkDir:      t.TempDir(),
+		Interactions: broker,
+		Emit: func(_ context.Context, name string, data any) {
+			if name == "runtime.antigravity.lifecycle" || strings.HasPrefix(name, "runtime.antigravity.background.") {
+				raw, _ := json.Marshal(data)
+				t.Logf("event %s: %s", name, raw)
+			}
+		},
+		Instructions: relay.CompiledInstructions{
+			Stable: "This integration test authorizes one native subagent. If the subagent reports it cannot run a shell command due to approval restrictions, run the command directly in the parent conversation and return its output.",
+			Prompt: "Invoke exactly one native subagent (invoke_subagent), role Command Probe, TypeName self, asking it to run `echo RELAY_SUBAGENT_CMD_OK` via run_command and return the output. If the subagent cannot run it, run `echo RELAY_SUBAGENT_CMD_OK` yourself. Reply with exactly RELAY_SUBAGENT_CMD_OK.",
+		},
+		Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{}),
+	}
+	result, err := executor.Execute(ctx, execution)
+	if err != nil {
+		t.Fatalf("subagent command failed: %v", err)
+	}
+	if !strings.Contains(result.Summary, "RELAY_SUBAGENT_CMD_OK") {
+		t.Fatalf("unexpected summary: %q", result.Summary)
+	}
+	if len(broker.prompts) == 0 {
+		t.Fatalf("expected parent command approval via interaction broker, got none")
+	}
+	t.Logf("Subagent failed fast and parent completed with %d approval(s) (%v): %q", len(broker.prompts), broker.prompts, result.Summary)
+}

@@ -25,10 +25,9 @@ func main() {
 		_ = flags.Parse(os.Args[2:])
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := antigravity.ForwardLifecycleHook(ctx, os.Stdin, *url, *token); err != nil {
+		if err := antigravity.ForwardHook(ctx, os.Stdin, os.Stdout, *url, *token); err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println("{}")
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] != "call" {

@@ -1,6 +1,7 @@
 package antigravity
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -20,17 +21,30 @@ import (
 // The ACP prompt response ends a foreground turn, not necessarily the native
 // conversation. AGY's Stop hook supplies the authoritative fullyIdle state.
 // A private additional customization directory preserves all user hooks.
+// PreToolUse also bridges subagent tool permissions that AGY ACP does not
+// surface over session/request_permission.
 type acpLifecycle struct {
 	dir, url, token string
 	server          *http.Server
 }
 
-type lifecycleEvent struct {
-	ConversationID    string `json:"conversationId"`
-	HookEventName     string `json:"hookEventName"`
-	FullyIdle         *bool  `json:"fullyIdle,omitempty"`
-	TerminationReason string `json:"terminationReason,omitempty"`
+type hookToolCall struct {
+	ID   string         `json:"id,omitempty"`
+	Name string         `json:"name"`
+	Args map[string]any `json:"args,omitempty"`
 }
+
+type lifecycleEvent struct {
+	ConversationID    string        `json:"conversationId"`
+	HookEventName     string        `json:"hookEventName"`
+	FullyIdle         *bool         `json:"fullyIdle,omitempty"`
+	TerminationReason string        `json:"terminationReason,omitempty"`
+	ToolCall          *hookToolCall `json:"toolCall,omitempty"`
+	WorkspacePaths    []string      `json:"workspacePaths,omitempty"`
+	Cwd               string        `json:"cwd,omitempty"`
+}
+
+const subagentApprovalToolMatcher = "run_command|read_file|view_file|view_file_outline|view_code_item|write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content|list_dir|find_by_name|grep_search"
 
 func startACPLifecycle(c *acpClient, toolDir string) (*acpLifecycle, error) {
 	tool, err := lifecycleTool(toolDir)
@@ -67,7 +81,25 @@ func startACPLifecycle(c *acpClient, toolDir string) (*acpLifecycle, error) {
 	b.url = "http://" + listener.Addr().String()
 	command += " --url " + b.url + " --token " + b.token
 	handler := map[string]any{"type": "command", "command": command, "timeout": 15}
-	hooks, _ := json.Marshal(map[string]any{"relay-lifecycle-" + b.token[:12]: map[string]any{"PreInvocation": []any{handler}, "Stop": []any{handler}}})
+	hookSpec := map[string]any{
+		"PreInvocation": []any{handler},
+		"Stop":          []any{handler},
+	}
+	if !c.skipPermissions {
+		// AGY ACP does not route subagent tool confirmations over
+		// session/request_permission, causing self-type subagents to hang
+		// indefinitely on privileged tools. Fail fast in PreToolUse for
+		// subagent tools that would block on an unreachable prompt.
+		hookSpec["PreToolUse"] = []any{
+			map[string]any{
+				"matcher": subagentApprovalToolMatcher,
+				"hooks":   []any{handler},
+			},
+		}
+	}
+	hooks, _ := json.Marshal(map[string]any{
+		"relay-lifecycle-" + b.token[:12]: hookSpec,
+	})
 	if err := os.WriteFile(filepath.Join(dir, ".agents", "hooks.json"), hooks, 0600); err != nil {
 		_ = listener.Close()
 		return nil, err
@@ -79,8 +111,14 @@ func startACPLifecycle(c *acpClient, toolDir string) (*acpLifecycle, error) {
 			return
 		}
 		var event lifecycleEvent
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&event); err != nil || event.ConversationID == "" || (event.HookEventName != "PreInvocation" && event.HookEventName != "Stop") {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&event); err != nil || event.ConversationID == "" || (event.HookEventName != "PreInvocation" && event.HookEventName != "Stop" && event.HookEventName != "PreToolUse") {
 			http.Error(w, "invalid lifecycle event", http.StatusBadRequest)
+			return
+		}
+		if event.HookEventName == "PreToolUse" {
+			decision := c.handleSubagentPreToolUse(event, b.dir)
+			raw, _ := json.Marshal(decision)
+			_, _ = w.Write(append(raw, '\n'))
 			return
 		}
 		raw, _ := json.Marshal(event)
@@ -176,7 +214,7 @@ func (c *acpClient) waitForIdle(ctx context.Context, result, sessionParams map[s
 	// may arrive in either order. Reload only after authoritative completion and
 	// consume its replay fence to obtain the full saved reply. Never resubmit a
 	// user prompt or expose replayed tools/thinking as new current-turn activity.
-	c.active = false
+	c.setActive(c.sessionID, false)
 	c.replaySessionID, c.replayComplete = c.sessionID, false
 	c.snapshot = &strings.Builder{}
 	defer func() { c.snapshot = nil }()
@@ -201,9 +239,136 @@ func (c *acpClient) waitForIdle(ctx context.Context, result, sessionParams map[s
 	return nil
 }
 
+func hasSkipPermissionsFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--dangerously-skip-permissions" || arg == "--dangerously-skip-permissions=true" {
+			return true
+		}
+	}
+	return false
+}
+
+// handleSubagentPreToolUse prevents AGY subagents from deadlocking on internal
+// tool permission prompts that AGY ACP never forwards over session/request_permission.
+// Parent conversations return decision="allow" so they proceed directly to AGY's
+// normal ACP session/request_permission flow without interference.
+func (c *acpClient) handleSubagentPreToolUse(event lifecycleEvent, hooksDir string) map[string]any {
+	sessionID, active := c.sessionState()
+	if !active || event.ToolCall == nil || event.ConversationID == sessionID || c.skipPermissions {
+		return map[string]any{"decision": "allow"}
+	}
+	if !subagentToolNeedsApproval(event, c.mode, hooksDir) {
+		return map[string]any{"decision": "allow"}
+	}
+	return map[string]any{
+		"decision": "deny",
+		"reason": fmt.Sprintf(
+			"AGY ACP cannot interactively approve subagent tool %q (%s); it would hang waiting for a prompt that cannot be shown. Report this to the parent conversation so the parent can run it directly.",
+			event.ToolCall.Name,
+			subagentToolTitle(event.ToolCall),
+		),
+	}
+}
+
+func subagentToolNeedsApproval(event lifecycleEvent, mode, hooksDir string) bool {
+	if event.ToolCall == nil {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(event.ToolCall.Name))
+	switch name {
+	case "run_command":
+		return true
+	case "write_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content":
+		if mode == "accept-edits" && pathWithinWorkspaces(toolTargetPath(event.ToolCall.Args), event.Cwd, event.WorkspacePaths, hooksDir) {
+			return false
+		}
+		return true
+	case "read_file", "view_file", "view_file_outline", "view_code_item", "list_dir", "find_by_name", "grep_search":
+		target := toolTargetPath(event.ToolCall.Args)
+		if target == "" {
+			return false
+		}
+		return !pathWithinWorkspaces(target, event.Cwd, event.WorkspacePaths, hooksDir)
+	default:
+		return false
+	}
+}
+
+func toolTargetPath(args map[string]any) string {
+	for _, key := range []string{"Path", "AbsolutePath", "TargetFile", "DirectoryPath", "SearchPath", "SearchDirectory", "path", "file_path"} {
+		if value := strings.TrimSpace(stringField(args, key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func pathWithinWorkspaces(target, cwd string, workspaces []string, hooksDir string) bool {
+	if target == "" {
+		return false
+	}
+	if !filepath.IsAbs(target) && cwd != "" {
+		target = filepath.Join(cwd, target)
+	}
+	cleanTarget, err := filepath.Abs(target)
+	if err != nil {
+		cleanTarget = filepath.Clean(target)
+	}
+	cleanHooks := ""
+	if hooksDir != "" {
+		if abs, err := filepath.Abs(hooksDir); err == nil {
+			cleanHooks = abs
+		} else {
+			cleanHooks = filepath.Clean(hooksDir)
+		}
+	}
+	for _, ws := range workspaces {
+		if strings.TrimSpace(ws) == "" {
+			continue
+		}
+		cleanWS, err := filepath.Abs(ws)
+		if err != nil {
+			cleanWS = filepath.Clean(ws)
+		}
+		if cleanHooks != "" && cleanWS == cleanHooks {
+			continue
+		}
+		rel, err := filepath.Rel(cleanWS, cleanTarget)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func subagentToolTitle(call *hookToolCall) string {
+	if call == nil {
+		return "tool"
+	}
+	if cmd := strings.TrimSpace(stringField(call.Args, "CommandLine")); cmd != "" {
+		return cmd
+	}
+	if cmd := strings.TrimSpace(stringField(call.Args, "command")); cmd != "" {
+		return cmd
+	}
+	if target := toolTargetPath(call.Args); target != "" {
+		return call.Name + " " + target
+	}
+	if call.Name != "" {
+		return call.Name
+	}
+	return "tool"
+}
+
 // ForwardLifecycleHook is used by the bundled relay-tool command. It forwards
 // only lifecycle fields, leaving hook decisions and user customizations intact.
 func ForwardLifecycleHook(ctx context.Context, input io.Reader, url, token string) error {
+	return ForwardHook(ctx, input, io.Discard, url, token)
+}
+
+// ForwardHook forwards whitelisted Antigravity hook fields to Relay's local
+// loopback endpoint and writes the JSON hook response to output.
+func ForwardHook(ctx context.Context, input io.Reader, output io.Writer, url, token string) error {
 	var event lifecycleEvent
 	if err := json.NewDecoder(io.LimitReader(input, 4<<20)).Decode(&event); err != nil {
 		return err
@@ -215,8 +380,13 @@ func ForwardLifecycleHook(ctx context.Context, input io.Reader, url, token strin
 	if err != nil || parsed.URL.Scheme != "http" || parsed.URL.Hostname() != "127.0.0.1" {
 		return errors.New("Relay AGY hook connection must use loopback HTTP")
 	}
+	if event.HookEventName != "PreToolUse" {
+		event.ToolCall = nil
+		event.WorkspacePaths = nil
+		event.Cwd = ""
+	}
 	raw, _ := json.Marshal(event)
-	parsed.Body = io.NopCloser(strings.NewReader(string(raw)))
+	parsed.Body = io.NopCloser(bytes.NewReader(raw))
 	parsed.Header.Set("Authorization", "Bearer "+token)
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer client.CloseIdleConnections()
@@ -227,6 +397,19 @@ func ForwardLifecycleHook(ctx context.Context, input io.Reader, url, token strin
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("Relay AGY hook returned HTTP %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	if err != nil {
+		return err
+	}
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		body = []byte("{}")
+	}
+	if output != nil {
+		if _, err := output.Write(append(body, '\n')); err != nil {
+			return err
+		}
 	}
 	return nil
 }

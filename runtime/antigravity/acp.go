@@ -47,6 +47,7 @@ type acpClient struct {
 	incoming         chan rpcRead
 	stderr           *agentcli.LimitedBuffer
 	closeOnce        sync.Once
+	mu               sync.RWMutex
 	nextID           int
 	updates          *acpEvents
 	execution        relay.Execution
@@ -55,6 +56,8 @@ type acpClient struct {
 	replayComplete   bool
 	lifecycle        *acpLifecycle
 	sessionID        string
+	mode             string
+	skipPermissions  bool
 	hookSeen         bool
 	fullyIdle        bool
 	stopError        string
@@ -62,9 +65,24 @@ type acpClient struct {
 	snapshot         *strings.Builder
 }
 
+func (c *acpClient) setActive(sessionID string, active bool) {
+	c.mu.Lock()
+	c.sessionID = sessionID
+	c.active = active
+	c.mu.Unlock()
+}
+
+func (c *acpClient) sessionState() (sessionID string, active bool) {
+	c.mu.RLock()
+	sessionID = c.sessionID
+	active = c.active
+	c.mu.RUnlock()
+	return sessionID, active
+}
+
 func startACP(ctx context.Context, config Config, run agentcli.Run, execution relay.Execution, args []string) (*acpClient, error) {
 	processCtx, stop := context.WithCancel(ctx)
-	c := &acpClient{ctx: processCtx, stop: stop, incoming: make(chan rpcRead, 64), execution: execution, updates: newACPEvents(ctx, execution)}
+	c := &acpClient{ctx: processCtx, stop: stop, incoming: make(chan rpcRead, 64), execution: execution, updates: newACPEvents(ctx, execution), skipPermissions: hasSkipPermissionsFlag(args)}
 	lifecycle, err := startACPLifecycle(c, config.ToolDir)
 	if err != nil {
 		stop()
@@ -427,6 +445,7 @@ func (e Executor) executeACP(ctx context.Context, execution relay.Execution) (re
 		if _, err = c.call(ctx, "session/set_mode", map[string]any{"sessionId": sessionID, "modeId": mode}); err != nil {
 			return relay.Result{}, fmt.Errorf("select ACP mode: %w", err)
 		}
+		c.mode = mode
 	}
 	prompt := []any{map[string]string{"type": "text", "text": execution.Instructions.Prompt}}
 	if len(run.ImagePaths) > 0 {
@@ -447,7 +466,7 @@ func (e Executor) executeACP(ctx context.Context, execution relay.Execution) (re
 			prompt = append(prompt, map[string]string{"type": "image", "mimeType": images[i].ContentType, "data": base64.StdEncoding.EncodeToString(bytes)})
 		}
 	}
-	c.sessionID, c.active = sessionID, true
+	c.setActive(sessionID, true)
 	result, err := c.call(ctx, "session/prompt", map[string]any{"sessionId": sessionID, "prompt": prompt})
 	if err != nil {
 		// agy can acknowledge session/load for a deleted trajectory and report the
@@ -465,7 +484,7 @@ func (e Executor) executeACP(ctx context.Context, execution relay.Execution) (re
 			return relay.Result{}, err
 		}
 	}
-	c.active = false
+	c.setActive(sessionID, false)
 	c.updates.emit("runtime.antigravity.prompt.completed", result)
 	c.updates.finish()
 	stopReason := stringField(result, "stopReason")
