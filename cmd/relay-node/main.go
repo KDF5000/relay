@@ -109,7 +109,6 @@ func main() {
 	}
 	cfg.Node.Version = relay.Version
 	cfg.Node.ProtocolVersion = relay.ProtocolVersion
-	cfg.Node.Labels = machineLabels(cfg.Node.Labels, cfg.Server)
 	registry := binding.NewRegistry()
 	for _, item := range cfg.Bindings {
 		var provider relay.CapabilityProvider
