@@ -248,6 +248,56 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-stream","
 	}
 }
 
+func TestAppServerIgnoresSubagentTurnAndMessages(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+[ "$1" = "app-server" ] || exit 8
+read -r initialize
+printf '%s\n' '{"id":1,"result":{"userAgent":"fake"}}'
+read -r initialized
+read -r thread_start
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-main"}}}'
+read -r turn_start
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-main"}}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-main","turnId":"turn-main","itemId":"main-1","delta":"Starting review."}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-sub","turnId":"turn-sub","itemId":"sub-1","delta":"Subagent verification.md output"}}'
+printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-sub","turnId":"turn-sub","item":{"id":"sub-1","type":"agentMessage","text":"Subagent verification.md output"}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-sub","turn":{"id":"turn-sub","items":[],"status":"completed"}}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-main","turnId":"turn-main","itemId":"main-2","delta":"Final structured review report"}}'
+printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-main","turnId":"turn-main","item":{"id":"main-2","type":"agentMessage","text":"Final structured review report"}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-main","turn":{"id":"turn-main","items":[],"status":"completed"}}}'
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var deltas []string
+	var final string
+	executor := runtimecodex.Executor{Config: runtimecodex.Config{Binary: fake, Protocol: "app-server", WorkRoot: dir, Ephemeral: true}}
+	result, err := executor.Execute(context.Background(), relay.Execution{
+		RunID:        "run-subagent",
+		Instructions: relay.CompiledInstructions{Prompt: "review mr"},
+		Capabilities: relay.NewCapabilityInvoker(relay.CapabilityInvokerOptions{}),
+		Emit: func(_ context.Context, event string, data any) {
+			if event == "assistant.message.delta" {
+				deltas = append(deltas, data.(map[string]string)["delta"])
+			}
+			if event == "assistant.final.completed" {
+				final = data.(map[string]string)["text"]
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary != "Final structured review report" || final != "Final structured review report" {
+		t.Fatalf("subagent leaked into final result: summary=%q final=%q", result.Summary, final)
+	}
+	if strings.Contains(strings.Join(deltas, ""), "Subagent") {
+		t.Fatalf("subagent delta leaked into assistant.message.delta: %v", deltas)
+	}
+}
+
 func TestAppServerAcceptsMessageLargerThanScannerLimit(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "codex")

@@ -188,6 +188,7 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 
 	var message strings.Builder
 	messageItemID := ""
+	turnID := ""
 	turnStarted := false
 	turnCompleted := false
 	for {
@@ -202,6 +203,13 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 			if rpc.Error != nil {
 				return relay.Result{}, errors.New(rpc.Error.Message)
 			}
+			var startedTurn struct {
+				Turn struct {
+					ID string `json:"id"`
+				} `json:"turn"`
+			}
+			_ = json.Unmarshal(rpc.Result, &startedTurn)
+			turnID = startedTurn.Turn.ID
 			// The start response establishes which turn belongs to this Run.
 			// Restored usage notifications can arrive before this response.
 			emitAppServerEvent(ctx, execution, fork.Name, rpcMessage{Method: "turn/started", Params: rpc.Result})
@@ -209,6 +217,13 @@ func executeAppServer(ctx context.Context, config Config, execution relay.Execut
 			continue
 		}
 		emitAppServerEvent(ctx, execution, fork.Name, rpc)
+		if !belongsToMainTurn(rpc.Params, threadID, turnID) {
+			// Subagent threads emit their own item/agentMessage/delta,
+			// item/completed, and turn/completed notifications on the same
+			// app-server stream. Never let a subagent overwrite the main
+			// assistant message or prematurely terminate the main turn.
+			continue
+		}
 		if rpc.Method == "item/agentMessage/delta" {
 			var params struct {
 				ItemID string `json:"itemId"`
@@ -314,6 +329,42 @@ func emitAppServerEvent(ctx context.Context, execution relay.Execution, provider
 		_ = json.Unmarshal(message.Params, &params)
 	}
 	execution.Emit(ctx, "runtime."+provider+"."+eventType, params)
+}
+
+func belongsToMainTurn(data json.RawMessage, mainThreadID, mainTurnID string) bool {
+	if len(data) == 0 {
+		return true
+	}
+	var scope struct {
+		ThreadID    string `json:"threadId"`
+		ThreadIDAlt string `json:"thread_id"`
+		TurnID      string `json:"turnId"`
+		TurnIDAlt   string `json:"turn_id"`
+		Turn        struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(data, &scope); err != nil {
+		return true
+	}
+	tid := scope.ThreadID
+	if tid == "" {
+		tid = scope.ThreadIDAlt
+	}
+	if mainThreadID != "" && tid != "" && tid != mainThreadID {
+		return false
+	}
+	turnID := scope.TurnID
+	if turnID == "" {
+		turnID = scope.TurnIDAlt
+	}
+	if turnID == "" {
+		turnID = scope.Turn.ID
+	}
+	if mainTurnID != "" && turnID != "" && turnID != mainTurnID {
+		return false
+	}
+	return true
 }
 
 func completedAgentMessage(data json.RawMessage) string {
